@@ -1,0 +1,16 @@
+{
+  "singleQuote": true,
+  "semi": true,
+  "trailingComma": "all",
+  "printWidth": 100,
+  "tabWidth": 2,
+  "arrowParens": "always",
+  "overrides": [
+    {
+      "files": "packages/studio-ui/**/*.{ts,tsx}",
+      "options": {
+        "semi": false
+      }
+    }
+  ]
+}

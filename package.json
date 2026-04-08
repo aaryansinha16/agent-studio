@@ -1,0 +1,38 @@
+{
+  "name": "agent-studio",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Visual orchestration workspace for Ruflo (Claude Flow) multi-agent swarms",
+  "license": "MIT",
+  "workspaces": [
+    "packages/*"
+  ],
+  "scripts": {
+    "dev": "concurrently -n bridge,ui -c cyan,magenta \"npm run dev -w @agent-studio/event-bridge\" \"npm run dev -w @agent-studio/studio-ui\"",
+    "dev:full": "bash scripts/dev.sh",
+    "dev:mock": "bash scripts/dev-mock.sh",
+    "dev:electron": "bash scripts/dev-electron.sh",
+    "mock": "concurrently -n bridge,mock -c cyan,yellow --kill-others-on-fail \"npm run dev -w @agent-studio/event-bridge\" \"sleep 1 && tsx scripts/mock-events.ts\"",
+    "build": "tsc --build && npm run typecheck -w @agent-studio/studio-ui && npm run typecheck -w @agent-studio/desktop-overlay && npm run typecheck -w @agent-studio/electron-shell && npm run build -w @agent-studio/studio-ui && npm run build -w @agent-studio/desktop-overlay && npm run build -w @agent-studio/electron-shell",
+    "clean": "tsc --build --clean && rm -rf packages/studio-ui/dist packages/desktop-overlay/dist packages/electron-shell/out",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "lint": "eslint \"packages/**/src/**/*.{ts,tsx}\"",
+    "format": "prettier --write \"packages/**/src/**/*.{ts,tsx,json,css}\"",
+    "typecheck": "tsc --build"
+  },
+  "devDependencies": {
+    "@types/node": "^20.12.0",
+    "@typescript-eslint/eslint-plugin": "^7.7.0",
+    "@typescript-eslint/parser": "^7.7.0",
+    "concurrently": "^8.2.2",
+    "eslint": "^8.57.0",
+    "prettier": "^3.2.5",
+    "tsx": "^4.7.2",
+    "typescript": "^5.5.4",
+    "vitest": "^1.5.0"
+  },
+  "engines": {
+    "node": ">=20.0.0"
+  }
+}

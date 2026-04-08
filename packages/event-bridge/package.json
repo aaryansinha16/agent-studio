@@ -1,0 +1,34 @@
+{
+  "name": "@agent-studio/event-bridge",
+  "version": "0.1.0",
+  "private": true,
+  "description": "WebSocket event bridge and state store between Ruflo plugin and Studio UI",
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js",
+      "default": "./dist/index.js"
+    }
+  },
+  "files": ["dist"],
+  "scripts": {
+    "build": "tsc -b",
+    "clean": "rm -rf dist *.tsbuildinfo",
+    "dev": "tsx watch src/server.ts",
+    "start": "tsx src/server.ts",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@agent-studio/shared": "0.1.0",
+    "better-sqlite3": "^11.1.2",
+    "ws": "^8.17.0",
+    "zod": "^3.23.8"
+  },
+  "devDependencies": {
+    "@types/better-sqlite3": "^7.6.10",
+    "@types/ws": "^8.5.10"
+  }
+}

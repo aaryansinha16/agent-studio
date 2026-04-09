@@ -71,7 +71,7 @@ export class LaunchOrchestrator {
   checkRufloAvailability(): boolean {
     if (this.rufloAvailable !== null) return this.rufloAvailable
     try {
-      execSync('npx ruflo --version', {
+      execSync('npx claude-flow --version', {
         timeout: 15_000,
         stdio: 'pipe',
         env: { ...process.env },
@@ -116,24 +116,24 @@ export class LaunchOrchestrator {
     this.activeSwarmId = null
   }
 
-  /** Build the CLI command we *would* run if real mode were enabled. */
+  /**
+   * Build the CLI command for display and for spawn().
+   *
+   * Ruflo's actual CLI syntax (from `claude-flow swarm --help`):
+   *   claude-flow swarm start -o "Build API" -s development
+   */
   buildCommand(params: LaunchParams): string {
-    // Quote the prompt safely — escape backslashes and inner quotes.
     const safePrompt = params.prompt.replace(/\\/g, '\\\\').replace(/"/g, '\\"')
     const parts = [
       'npx',
-      'ruflo',
+      'claude-flow',
       'swarm',
+      'start',
+      '-o',
       `"${safePrompt}"`,
-      '--claude',
-      '--agents',
-      String(params.agentCount),
-      '--strategy',
+      '-s',
       params.strategy,
     ]
-    if (params.workspacePath) {
-      parts.push('--cwd', params.workspacePath)
-    }
     return parts.join(' ')
   }
 
@@ -195,16 +195,13 @@ export class LaunchOrchestrator {
     })
 
     const args = [
-      'ruflo',
+      'claude-flow',
       'swarm',
+      'start',
+      '-o',
       params.prompt,
-      '--claude',
-      '--agents',
-      String(params.agentCount),
-      '--strategy',
+      '-s',
       params.strategy,
-      '--cwd',
-      cwd,
     ]
 
     try {

@@ -229,6 +229,16 @@ export const wireIpcBridge = (options: WireOptions): (() => void) => {
   }
   ipcMain.on(IPC_CHANNELS.PROJECTS_SAVE, onSaveProject)
 
+  // ── Ruflo lifecycle (renderer → main) ─────────────────────────────────────
+
+  ipcMain.handle(IPC_CHANNELS.RUFLO_CHECK, (): boolean => {
+    return launchOrchestrator.checkRufloAvailability()
+  })
+
+  ipcMain.handle(IPC_CHANNELS.SWARM_STOP, (): void => {
+    launchOrchestrator.stop()
+  })
+
   // ── teardown ───────────────────────────────────────────────────────────────
 
   return () => {
@@ -240,10 +250,14 @@ export const wireIpcBridge = (options: WireOptions): (() => void) => {
     ipcMain.removeHandler(IPC_CHANNELS.WORKSPACE_SCAN)
     ipcMain.removeHandler(IPC_CHANNELS.LAUNCH_SWARM)
     ipcMain.removeHandler(IPC_CHANNELS.PROJECTS_LIST)
+    ipcMain.removeHandler(IPC_CHANNELS.RUFLO_CHECK)
+    ipcMain.removeHandler(IPC_CHANNELS.SWARM_STOP)
     ipcMain.removeListener(IPC_CHANNELS.OVERLAY_SET_MOUSE_PASSTHROUGH, onSetMousePassthrough)
     ipcMain.removeListener(IPC_CHANNELS.OVERLAY_FOCUS_AGENT, onOverlayFocusAgent)
     ipcMain.removeListener(IPC_CHANNELS.OVERLAY_SET_VISIBLE, onSetOverlayVisible)
     ipcMain.removeListener(IPC_CHANNELS.PROJECTS_SAVE, onSaveProject)
+    // Stop any running swarm on app shutdown.
+    launchOrchestrator.stop()
   }
 }
 

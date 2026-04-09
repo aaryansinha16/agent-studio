@@ -182,6 +182,8 @@ app.on('window-all-closed', () => {
 
 app.on('before-quit', () => {
   log.info('app quitting, tearing down')
+  // Stop any running swarm child process before tearing down IPC.
+  runtime.launchOrchestrator?.stop()
   runtime.teardownIpc?.()
   runtime.bridgeClient?.stop()
   if (runtime.tray) {

@@ -87,7 +87,8 @@ const MAX_ZOOM = 2.0
 // Walking speed (0..1 lerp alpha per ~16ms frame).
 const WALK_SPEED = 0.12
 
-const PARTICLE_COUNT = 32
+// Particles removed per A4 — they added visual noise without value
+// and cost ~32 sprites updating position + alpha every frame.
 
 const RECOVERY_FLASH_MS = 350
 const WATERCOOLER_MIN_GAP_MS = 10_000
@@ -110,6 +111,8 @@ interface DeskSlot {
   monitor: Graphics
   /** Live red tint overlay that fades in when the occupant is blocked. */
   tint: Graphics
+  /** Cached monitor visual state so we skip redraws when nothing changed. */
+  lastMonitorMode: 'coding' | 'blocked' | 'normal' | null
 }
 
 interface WatercoolerTrip {
@@ -181,6 +184,11 @@ export class IsometricOffice {
   private nextWatercoolerAt = 0
   private currentWatercoolerAgentId: string | null = null
 
+  // FPS counter — visible during dev, removed before ship.
+  private fpsText: Text | null = null
+  private fpsFrameCount = 0
+  private fpsLastSample = 0
+
   // Camera state.
   private cameraX = 0
   private cameraY = 0
@@ -232,8 +240,6 @@ export class IsometricOffice {
     this.world.addChild(this.dynamicFurnitureLayer)
     this.buildClockHands()
     this.world.addChild(this.clockHands)
-    this.spawnParticles()
-    this.world.addChild(this.particleLayer)
     this.characterLayer.sortableChildren = true
     this.world.addChild(this.characterLayer)
     this.world.addChild(this.bubbleLayer)
@@ -323,9 +329,32 @@ export class IsometricOffice {
       Date.now() + WATERCOOLER_MIN_GAP_MS +
       Math.random() * (WATERCOOLER_MAX_GAP_MS - WATERCOOLER_MIN_GAP_MS)
 
+    // Dev-only FPS counter — sits on the stage (not the world) so it
+    // doesn't zoom. Remove this block before shipping.
+    this.fpsText = new Text('-- fps', {
+      fontFamily: 'JetBrains Mono, ui-monospace, Menlo, monospace',
+      fontSize: 12,
+      fill: 0x4ecdc4,
+    })
+    this.fpsText.x = 8
+    this.fpsText.y = 8
+    app.stage.addChild(this.fpsText)
+    this.fpsLastSample = performance.now()
+
     app.ticker.add((delta) => {
       const deltaMs = delta * (1000 / 60)
       this.tick(deltaMs)
+
+      // Update FPS counter every 30 frames.
+      this.fpsFrameCount += 1
+      if (this.fpsFrameCount >= 30) {
+        const now = performance.now()
+        const elapsed = now - this.fpsLastSample
+        const fps = Math.round((this.fpsFrameCount * 1000) / elapsed)
+        if (this.fpsText) this.fpsText.text = `${fps} fps`
+        this.fpsLastSample = now
+        this.fpsFrameCount = 0
+      }
     })
   }
 
@@ -934,7 +963,7 @@ export class IsometricOffice {
         tint.alpha = 0
         this.dynamicFurnitureLayer.addChild(tint)
 
-        this.desks.push({ index, row, col, x, y: rowY, monitor, tint })
+        this.desks.push({ index, row, col, x, y: rowY, monitor, tint, lastMonitorMode: null })
       }
     }
   }
@@ -952,20 +981,6 @@ export class IsometricOffice {
     this.clockHands.addChild(this.hourHand)
     this.clockHands.addChild(this.minuteHand)
     this.clockHands.addChild(this.secondHand)
-  }
-
-  private spawnParticles(): void {
-    for (let i = 0; i < PARTICLE_COUNT; i += 1) {
-      const p = new Graphics()
-      p.beginFill(OFFICE_COLORS.particle, 0.55)
-      p.drawCircle(0, 0, 1.8)
-      p.endFill()
-      p.x = Math.random() * WORLD_WIDTH
-      p.y = FLOOR_TOP + Math.random() * (WORLD_HEIGHT - FLOOR_TOP)
-      ;(p as Graphics & { __phase?: number }).__phase = Math.random() * Math.PI * 2
-      this.particleLayer.addChild(p)
-      this.particles.push(p)
-    }
   }
 
   // ── agent lifecycle ────────────────────────────────────────────────────────
@@ -1050,6 +1065,15 @@ export class IsometricOffice {
 
     const sameRow =
       senderDesk && receiverDesk && senderDesk.row === receiverDesk.row
+
+    // Cap at 4 simultaneous bubbles — evict the oldest if full.
+    while (this.bubbles.length >= 4) {
+      const oldest = this.bubbles.shift()
+      if (oldest) {
+        this.bubbleLayer.removeChild(oldest.bubble)
+        oldest.bubble.destroy({ children: true })
+      }
+    }
 
     // Bubble with the sender's shirt color as an accent.
     const bubble = new SpeechBubble(message.content, {
@@ -1174,28 +1198,37 @@ export class IsometricOffice {
       }
     }
 
-    // Monitor glow + blocked tint updates.
+    // Monitor glow + blocked tint — only REDRAW the Graphics when mode changes.
     for (const desk of this.desks) {
       const occupant = this.occupantOfDesk(desk.index)
       const state: AgentState | null = occupant?.character.state ?? null
-      const coding = state === 'coding'
-      const blocked = state === 'blocked' || state === 'error'
+      const mode: 'coding' | 'blocked' | 'normal' =
+        state === 'coding' ? 'coding' : state === 'blocked' || state === 'error' ? 'blocked' : 'normal'
 
-      desk.monitor.clear()
-      desk.monitor.beginFill(
-        coding ? OFFICE_COLORS.monitorGlow : blocked ? OFFICE_COLORS.monitorBlack : OFFICE_COLORS.monitorScreen,
-        1,
-      )
-      desk.monitor.drawRoundedRect(-22, -30, 44, 18, 1.5)
-      desk.monitor.endFill()
-      if (coding) {
-        const glowAlpha = 0.35 + 0.3 * Math.sin(now / 180)
-        desk.monitor.lineStyle({ width: 2, color: OFFICE_COLORS.monitorGlow, alpha: glowAlpha })
-        desk.monitor.drawRoundedRect(-24, -32, 48, 22, 2)
+      if (mode !== desk.lastMonitorMode) {
+        desk.lastMonitorMode = mode
+        desk.monitor.clear()
+        desk.monitor.beginFill(
+          mode === 'coding'
+            ? OFFICE_COLORS.monitorGlow
+            : mode === 'blocked'
+              ? OFFICE_COLORS.monitorBlack
+              : OFFICE_COLORS.monitorScreen,
+          1,
+        )
+        desk.monitor.drawRoundedRect(-22, -30, 44, 18, 1.5)
+        desk.monitor.endFill()
+      }
+      // The coding glow pulse only needs an alpha flicker on the monitor —
+      // use the Graphics alpha instead of clear+redraw.
+      if (mode === 'coding') {
+        desk.monitor.alpha = 0.7 + 0.3 * Math.sin(now / 180)
+      } else if (desk.monitor.alpha !== 1) {
+        desk.monitor.alpha = 1
       }
 
-      // Blocked desk tint fades in/out smoothly.
-      const targetTintAlpha = blocked ? 0.14 : 0
+      // Blocked desk tint fades in/out smoothly — alpha only, no redraw.
+      const targetTintAlpha = mode === 'blocked' ? 0.14 : 0
       desk.tint.alpha += (targetTintAlpha - desk.tint.alpha) * 0.12
     }
 
@@ -1224,18 +1257,6 @@ export class IsometricOffice {
       Math.cos(secondAngle - Math.PI / 2) * (this._clockR * 0.8),
       Math.sin(secondAngle - Math.PI / 2) * (this._clockR * 0.8),
     )
-
-    // Drift dust particles.
-    for (const p of this.particles) {
-      const phase = (p as Graphics & { __phase?: number }).__phase ?? 0
-      p.x += Math.sin(phase + now / 1800) * 0.12
-      p.y += 0.08
-      p.alpha = 0.3 + 0.3 * Math.sin(phase + now / 1200)
-      if (p.y > WORLD_HEIGHT + 10) {
-        p.y = FLOOR_TOP - 10
-        p.x = Math.random() * WORLD_WIDTH
-      }
-    }
 
     // Recovery flash fade.
     if (this.flashRemaining > 0) {

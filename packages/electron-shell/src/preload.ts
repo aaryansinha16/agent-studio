@@ -121,6 +121,15 @@ const api: StudioBridgeApi = {
   saveProject(project: ProjectSession) {
     ipcRenderer.send(IPC_CHANNELS.PROJECTS_SAVE, project)
   },
+
+  async checkRuflo() {
+    const result = (await ipcRenderer.invoke(IPC_CHANNELS.RUFLO_CHECK)) as boolean
+    return result
+  },
+
+  async stopSwarm() {
+    await ipcRenderer.invoke(IPC_CHANNELS.SWARM_STOP)
+  },
 }
 
 contextBridge.exposeInMainWorld('studioBridge', api)

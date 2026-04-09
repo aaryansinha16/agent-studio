@@ -16,6 +16,9 @@
  *     actually flip this on.
  */
 
+import { spawn, execSync, type ChildProcess } from 'node:child_process'
+import { watch, type FSWatcher } from 'node:fs'
+
 import {
   type AgentInfo,
   type AgentState,
@@ -45,14 +48,72 @@ interface LaunchOrchestratorOptions {
  * Singleton launcher. Constructed once at app startup; the IPC handler
  * calls `.launch()` for every studio request.
  */
+/** Directories skipped by the file watcher to avoid noise. */
+const WATCH_IGNORE = ['node_modules', '.git', 'dist', 'build', '.swarm', '__pycache__', '.venv', 'target', '.next']
+
 export class LaunchOrchestrator {
   private readonly bridgeClient: BridgeClient
   private readonly realMode: boolean
   private launchCounter = 0
+  private rufloAvailable: boolean | null = null
+  /** Currently-running child process (real mode), null in mock mode. */
+  private activeChild: ChildProcess | null = null
+  private activeSwarmId: string | null = null
+  /** File watcher for the workspace folder (real mode only). */
+  private activeWatcher: FSWatcher | null = null
 
   constructor(options: LaunchOrchestratorOptions) {
     this.bridgeClient = options.bridgeClient
     this.realMode = options.realMode ?? process.env.RUFLO_REAL_MODE === '1'
+  }
+
+  /** Check if `ruflo` is reachable on this machine. Cached after first call. */
+  checkRufloAvailability(): boolean {
+    if (this.rufloAvailable !== null) return this.rufloAvailable
+    try {
+      execSync('npx ruflo --version', {
+        timeout: 15_000,
+        stdio: 'pipe',
+        env: { ...process.env },
+      })
+      this.rufloAvailable = true
+      log.info('Ruflo is available')
+    } catch {
+      this.rufloAvailable = false
+      log.info('Ruflo not found — mock mode will be used')
+    }
+    return this.rufloAvailable
+  }
+
+  /** Whether a real swarm process is currently running. */
+  get isRunning(): boolean {
+    return this.activeChild !== null && !this.activeChild.killed
+  }
+
+  /** PID of the active child process, or null. */
+  get activePid(): number | null {
+    return this.activeChild?.pid ?? null
+  }
+
+  /**
+   * Stop the currently-running swarm (if any). Sends SIGTERM to the
+   * child process, emits swarm:shutdown, and tears down the file watcher.
+   */
+  stop(): void {
+    if (this.activeChild && !this.activeChild.killed) {
+      log.info('stopping swarm', { swarmId: this.activeSwarmId, pid: this.activeChild.pid })
+      this.activeChild.kill('SIGTERM')
+    }
+    if (this.activeSwarmId) {
+      this.emit({
+        type: 'swarm:shutdown',
+        timestamp: Date.now(),
+        swarmId: this.activeSwarmId,
+      })
+    }
+    this.teardownWatcher()
+    this.activeChild = null
+    this.activeSwarmId = null
   }
 
   /** Build the CLI command we *would* run if real mode were enabled. */
@@ -90,16 +151,8 @@ export class LaunchOrchestrator {
       workspace: params.workspacePath,
     })
 
-    if (this.realMode) {
-      return {
-        ok: false,
-        command,
-        mode: 'real',
-        swarmId,
-        error:
-          'Real Ruflo execution is not yet wired in this build. ' +
-          'See PRODUCT_VISION.md Phase 4 — set RUFLO_REAL_MODE=0 (default) to use the mock orchestrator.',
-      }
+    if (this.realMode && this.checkRufloAvailability()) {
+      return this.launchReal(params, swarmId, command)
     }
 
     // ── mock mode ────────────────────────────────────────────────────────────
@@ -119,6 +172,198 @@ export class LaunchOrchestrator {
   // ───────────────────────────────────────────────────────────────────────────
 
   /** The actual scripted timeline — small but covers every event variant. */
+  // ── real mode ─────────────────────────────────────────────────────────────
+
+  private launchReal(params: LaunchParams, swarmId: string, command: string): LaunchResult {
+    // Stop any running swarm first.
+    if (this.isRunning) this.stop()
+
+    this.activeSwarmId = swarmId
+    const cwd = params.workspacePath ?? process.cwd()
+
+    // Emit swarm:initialized so the UI knows a swarm is starting.
+    this.emit({
+      type: 'swarm:initialized',
+      timestamp: Date.now(),
+      swarm: {
+        id: swarmId,
+        topology: 'hierarchical',
+        agentCount: params.agentCount,
+        status: 'active',
+        startedAt: Date.now(),
+      },
+    })
+
+    const args = [
+      'ruflo',
+      'swarm',
+      params.prompt,
+      '--claude',
+      '--agents',
+      String(params.agentCount),
+      '--strategy',
+      params.strategy,
+      '--cwd',
+      cwd,
+    ]
+
+    try {
+      const child = spawn('npx', args, {
+        cwd,
+        shell: true,
+        env: { ...process.env },
+        stdio: ['ignore', 'pipe', 'pipe'],
+      })
+      this.activeChild = child
+
+      log.info('ruflo process spawned', { pid: child.pid, swarmId, command })
+
+      // Stream stdout line by line.
+      let stdoutBuf = ''
+      child.stdout?.on('data', (data: Buffer) => {
+        stdoutBuf += data.toString()
+        const lines = stdoutBuf.split('\n')
+        stdoutBuf = lines.pop() ?? ''
+        for (const line of lines) {
+          if (line.trim()) {
+            this.parseRufloLine(line, swarmId, 'ruflo-stdout')
+          }
+        }
+      })
+
+      // Stream stderr.
+      let stderrBuf = ''
+      child.stderr?.on('data', (data: Buffer) => {
+        stderrBuf += data.toString()
+        const lines = stderrBuf.split('\n')
+        stderrBuf = lines.pop() ?? ''
+        for (const line of lines) {
+          if (line.trim()) {
+            this.parseRufloLine(line, swarmId, 'ruflo-stderr')
+          }
+        }
+      })
+
+      child.on('exit', (code, signal) => {
+        log.info('ruflo process exited', { pid: child.pid, code, signal, swarmId })
+        this.emit({
+          type: 'swarm:shutdown',
+          timestamp: Date.now(),
+          swarmId,
+        })
+        this.teardownWatcher()
+        this.activeChild = null
+        this.activeSwarmId = null
+      })
+
+      child.on('error', (err) => {
+        log.error('ruflo process error', { error: err.message, swarmId })
+        this.emit({
+          type: 'agent:log',
+          timestamp: Date.now(),
+          agentId: null,
+          line: `[system] process error: ${err.message}`,
+          level: 'error',
+          source: 'system',
+        })
+      })
+
+      // Start the workspace file watcher.
+      this.startWatcher(cwd, swarmId)
+
+      return { ok: true, command, mode: 'real', swarmId }
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err)
+      log.error('failed to spawn ruflo', { error: msg })
+      return { ok: false, command, mode: 'real', swarmId, error: msg }
+    }
+  }
+
+  /**
+   * Best-effort parser for Ruflo stdout/stderr. Tries to detect
+   * structured agent events; everything else becomes an `agent:log` line.
+   * The exact patterns depend on Ruflo's output format — we refine
+   * as we learn.
+   */
+  private parseRufloLine(
+    line: string,
+    swarmId: string,
+    source: 'ruflo-stdout' | 'ruflo-stderr',
+  ): void {
+    const ts = Date.now()
+    const lower = line.toLowerCase()
+
+    // Attempt to parse as JSON (some Ruflo versions emit structured JSON).
+    try {
+      const parsed = JSON.parse(line) as Record<string, unknown>
+      if (typeof parsed.type === 'string' && typeof parsed.timestamp === 'number') {
+        // Looks like a StudioEvent — forward it directly.
+        this.bridgeClient.sendEvent(parsed as unknown as StudioEvent, 'ruflo-real')
+        return
+      }
+    } catch {
+      // Not JSON — continue with text heuristics below.
+    }
+
+    // Heuristic patterns for common Ruflo output lines.
+    if (lower.includes('spawned agent') || lower.includes('agent spawn')) {
+      const level = 'info' as const
+      this.emit({ type: 'agent:log', timestamp: ts, agentId: null, line, level, source })
+      return
+    }
+
+    if (lower.includes('error') || lower.includes('failed') || lower.includes('exception')) {
+      this.emit({ type: 'agent:log', timestamp: ts, agentId: null, line, level: 'error', source })
+      return
+    }
+
+    if (lower.includes('warn')) {
+      this.emit({ type: 'agent:log', timestamp: ts, agentId: null, line, level: 'warn', source })
+      return
+    }
+
+    // Default: info-level log line.
+    this.emit({ type: 'agent:log', timestamp: ts, agentId: null, line, level: 'info', source })
+  }
+
+  // ── file watcher ─────────────────────────────────────────────────────────
+
+  private startWatcher(folderPath: string, swarmId: string): void {
+    this.teardownWatcher()
+    try {
+      this.activeWatcher = watch(folderPath, { recursive: true }, (eventType, filename) => {
+        if (!filename) return
+        // Skip noisy directories.
+        if (WATCH_IGNORE.some((dir) => filename.includes(dir))) return
+        const changeType =
+          eventType === 'rename'
+            ? ('create' as const)
+            : ('modify' as const)
+        this.emit({
+          type: 'file:changed',
+          timestamp: Date.now(),
+          filePath: filename,
+          changeType,
+          swarmId,
+        })
+      })
+      log.info('file watcher started', { folderPath, swarmId })
+    } catch (err) {
+      log.warn('file watcher failed to start', {
+        error: err instanceof Error ? err.message : String(err),
+      })
+    }
+  }
+
+  private teardownWatcher(): void {
+    if (this.activeWatcher) {
+      this.activeWatcher.close()
+      this.activeWatcher = null
+    }
+  }
+
+  // ── mock mode ────────────────────────────────────────────────────────────
+
   private async runMockScenario(params: LaunchParams, swarmId: string): Promise<void> {
     const agents = this.buildAgentRoster(params, swarmId)
 

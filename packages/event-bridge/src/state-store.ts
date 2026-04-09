@@ -355,6 +355,13 @@ export class StateStore {
         }
         return true;
       }
+      case 'agent:log':
+      case 'file:changed': {
+        // These events are forwarded to UI clients for display but do not
+        // mutate the in-memory world state. The bridge just persists them
+        // in the events table (via the pending-events queue) for replay.
+        return true;
+      }
       default: {
         // Exhaustiveness check — if a new StudioEvent variant is added without
         // updating this switch, TypeScript will fail to compile.

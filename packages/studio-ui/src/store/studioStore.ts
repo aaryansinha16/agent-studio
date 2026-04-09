@@ -497,6 +497,35 @@ export const useStudioStore = create<StudioState>((set, get) => ({
         set({ messages, agentLogs, log: pushLogged(state.log, event) })
         return
       }
+      case 'agent:log': {
+        // Route the log line to the specified agent's terminal, or to a
+        // global "Swarm Output" entry keyed by '__global__'.
+        const target = event.agentId ?? '__global__'
+        const agentLogs = cloneLogsMap(state)
+        agentLogs.set(
+          target,
+          appendAgentLog(state.agentLogs.get(target), {
+            text: event.line,
+            level: event.level === 'error' ? 'error' : event.level === 'warn' ? 'warn' : 'info',
+          }),
+        )
+        set({ agentLogs, log: pushLogged(state.log, event) })
+        return
+      }
+      case 'file:changed': {
+        // Add to a synthetic "__swarm__" file list, keyed by swarmId prefix.
+        // Also add to any agent whose deskIndex matches (best effort).
+        const agentFiles = cloneFilesMap(state)
+        const kind = event.changeType === 'delete' ? 'deleted' : event.changeType === 'create' ? 'created' : 'modified'
+        // Push to a global swarm file list.
+        const globalKey = `__swarm_${event.swarmId}__`
+        agentFiles.set(
+          globalKey,
+          appendAgentFile(state.agentFiles.get(globalKey), event.filePath, kind),
+        )
+        set({ agentFiles, log: pushLogged(state.log, event) })
+        return
+      }
     }
   },
 

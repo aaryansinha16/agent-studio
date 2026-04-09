@@ -221,6 +221,31 @@ export interface MessageSentEvent extends BaseEvent {
   message: AgentMessage;
 }
 
+/**
+ * A line of terminal output attributable to an agent (or to the swarm
+ * globally if `agentId` is null). In mock mode these are synthesized by
+ * the store; in real mode they come from parsing Ruflo stdout/stderr.
+ */
+export interface AgentLogEvent extends BaseEvent {
+  type: 'agent:log';
+  agentId: string | null;
+  line: string;
+  level: 'info' | 'warn' | 'error';
+  source: 'ruflo-stdout' | 'ruflo-stderr' | 'system';
+}
+
+/**
+ * A file in the workspace was created, modified, or deleted while a
+ * real Ruflo swarm was running. Emitted by the main-process file
+ * watcher (see B5). Not emitted in mock mode.
+ */
+export interface FileChangedEvent extends BaseEvent {
+  type: 'file:changed';
+  filePath: string;
+  changeType: 'create' | 'modify' | 'delete';
+  swarmId: string;
+}
+
 /** Discriminated union of every event type the system can emit. */
 export type StudioEvent =
   | AgentSpawnedEvent
@@ -231,7 +256,9 @@ export type StudioEvent =
   | TaskFailedEvent
   | SwarmInitializedEvent
   | SwarmShutdownEvent
-  | MessageSentEvent;
+  | MessageSentEvent
+  | AgentLogEvent
+  | FileChangedEvent;
 
 export type StudioEventType = StudioEvent['type'];
 

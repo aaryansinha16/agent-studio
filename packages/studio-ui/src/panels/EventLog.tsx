@@ -12,6 +12,8 @@ const eventColor: Record<StudioEvent['type'], string> = {
   'task:completed': 'text-emerald-300',
   'task:failed': 'text-rose-400',
   'message:sent': 'text-violet-300',
+  'agent:log': 'text-slate-400',
+  'file:changed': 'text-cyan-300',
 }
 
 const formatTime = (ms: number): string => {
@@ -47,6 +49,10 @@ const summarize = (event: StudioEvent): string => {
       return `task ${event.taskId} failed: ${event.error}`
     case 'message:sent':
       return `${event.message.fromAgent} → ${event.message.toAgent}: ${event.message.content}`
+    case 'agent:log':
+      return `${event.agentId ?? 'swarm'}: ${event.line}`
+    case 'file:changed':
+      return `${event.changeType} ${event.filePath}`
   }
 }
 

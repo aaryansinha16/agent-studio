@@ -1,15 +1,9 @@
 #!/usr/bin/env bash
-# Full Electron dev stack — bridge + mock events + both Vite renderers + Electron.
+# Full Electron dev stack — bridge + renderers + Electron.
 #
-# This is the primary command for desktop-overlay development. It starts:
-#   1. event bridge       (port 6747)
-#   2. mock event generator
-#   3. studio-ui Vite     (port 5173) — content for the Studio Window
-#   4. desktop-overlay Vite (port 5174) — content for the Overlay Window
-#   5. electron-vite dev  — runs the Electron main process and reloads it on edit
-#
-# Renderer URLs are passed to Electron via env vars so the main process
-# knows where to load them.
+# When RUFLO_REAL_MODE=1, the mock generator is SKIPPED so the UI starts
+# clean and only shows events from real Ruflo swarms launched by the user.
+# Otherwise (default) the mock generator runs alongside everything else.
 set -euo pipefail
 
 cd "$(dirname "$0")/.."
@@ -24,12 +18,24 @@ export OVERLAY_URL="${OVERLAY_URL:-http://localhost:5174}"
 # matter what the developer's shell is configured to.
 unset ELECTRON_RUN_AS_NODE
 
-exec npx --yes concurrently \
-  --names "bridge,mock,studio,overlay,electron" \
-  --prefix-colors "cyan,yellow,magenta,blue,green" \
-  --kill-others-on-fail \
-  "npx tsx packages/event-bridge/src/server.ts" \
-  "sleep 1 && npx tsx scripts/mock-events.ts" \
-  "npm run dev -w @agent-studio/studio-ui" \
-  "npm run dev -w @agent-studio/desktop-overlay" \
-  "sleep 3 && npm run dev -w @agent-studio/electron-shell"
+if [ "${RUFLO_REAL_MODE:-0}" = "1" ]; then
+  echo "[dev-electron] RUFLO_REAL_MODE=1 — skipping mock generator, waiting for real swarms"
+  exec npx --yes concurrently \
+    --names "bridge,studio,overlay,electron" \
+    --prefix-colors "cyan,magenta,blue,green" \
+    --kill-others-on-fail \
+    "npx tsx packages/event-bridge/src/server.ts" \
+    "npm run dev -w @agent-studio/studio-ui" \
+    "npm run dev -w @agent-studio/desktop-overlay" \
+    "sleep 3 && npm run dev -w @agent-studio/electron-shell"
+else
+  exec npx --yes concurrently \
+    --names "bridge,mock,studio,overlay,electron" \
+    --prefix-colors "cyan,yellow,magenta,blue,green" \
+    --kill-others-on-fail \
+    "npx tsx packages/event-bridge/src/server.ts" \
+    "sleep 1 && npx tsx scripts/mock-events.ts" \
+    "npm run dev -w @agent-studio/studio-ui" \
+    "npm run dev -w @agent-studio/desktop-overlay" \
+    "sleep 3 && npm run dev -w @agent-studio/electron-shell"
+fi

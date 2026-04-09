@@ -157,6 +157,23 @@ export const MessageSentEventSchema = z.object({
   message: AgentMessageSchema,
 });
 
+export const AgentLogEventSchema = z.object({
+  ...baseEvent,
+  type: z.literal('agent:log'),
+  agentId: z.string().nullable(),
+  line: z.string(),
+  level: z.enum(['info', 'warn', 'error']),
+  source: z.enum(['ruflo-stdout', 'ruflo-stderr', 'system']),
+});
+
+export const FileChangedEventSchema = z.object({
+  ...baseEvent,
+  type: z.literal('file:changed'),
+  filePath: z.string().min(1),
+  changeType: z.enum(['create', 'modify', 'delete']),
+  swarmId: z.string().min(1),
+});
+
 export const StudioEventSchema = z.discriminatedUnion('type', [
   AgentSpawnedEventSchema,
   AgentStateChangedEventSchema,
@@ -167,6 +184,8 @@ export const StudioEventSchema = z.discriminatedUnion('type', [
   SwarmInitializedEventSchema,
   SwarmShutdownEventSchema,
   MessageSentEventSchema,
+  AgentLogEventSchema,
+  FileChangedEventSchema,
 ]);
 
 // ─────────────────────────────────────────────────────────────────────────────

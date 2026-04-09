@@ -42,11 +42,18 @@ const useElectronTransport = (enabled: boolean): void => {
     const store = useStudioStore.getState
     let cancelled = false
 
+    // Optimistically show "connecting" until the snapshot resolves.
+    store().setConnectionStatus('connecting')
+
     bridge
       .requestState()
       .then((snapshot) => {
         if (cancelled) return
         store().hydrateFromSnapshot(snapshot)
+        // requestState() succeeding proves the bridge is live — set
+        // 'connected' here because the onConnection IPC listener only
+        // fires on FUTURE status changes and may miss the initial one.
+        store().setConnectionStatus('connected')
       })
       .catch((err: unknown) => {
         store().setConnectionStatus('error', err instanceof Error ? err.message : String(err))

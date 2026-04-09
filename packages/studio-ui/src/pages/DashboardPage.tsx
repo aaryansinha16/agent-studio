@@ -21,14 +21,14 @@ const DashboardPage = () => {
   const showCanvas = displayMode !== 'desktop'
 
   return (
-    <main className="flex flex-1 flex-col gap-4 overflow-hidden p-6">
+    <main className="flex flex-1 flex-col gap-4 overflow-y-auto p-6">
       <SwarmOverview />
       <WorkspacePanel />
       <ChatLauncher />
 
       <div
         className={[
-          'grid flex-1 grid-cols-1 gap-4 overflow-hidden transition',
+          'grid min-h-[420px] flex-1 grid-cols-1 gap-4 transition',
           selectedAgentId
             ? 'lg:grid-cols-[minmax(0,3fr)_minmax(0,1.4fr)_minmax(0,1.2fr)]'
             : 'lg:grid-cols-[minmax(0,3fr)_minmax(0,2fr)]',

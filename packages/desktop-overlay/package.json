@@ -1,0 +1,27 @@
+{
+  "name": "@agent-studio/desktop-overlay",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Transparent Pixi.js overlay rendering agent sprites on the macOS desktop",
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build",
+    "preview": "vite preview",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@agent-studio/canvas-core": "0.1.0",
+    "@agent-studio/shared": "0.1.0",
+    "pixi.js": "^7.4.2",
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1",
+    "zustand": "^4.5.2"
+  },
+  "devDependencies": {
+    "@types/react": "^18.3.3",
+    "@types/react-dom": "^18.3.0",
+    "@vitejs/plugin-react": "^4.3.1",
+    "vite": "^5.3.1"
+  }
+}

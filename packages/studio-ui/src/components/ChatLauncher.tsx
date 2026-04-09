@@ -86,6 +86,9 @@ const ChatLauncher = () => {
       })
       if (!result.ok && result.error) setError(result.error)
       if (result.ok) setPrompt('')
+      // Update the mock-mode flag based on what the orchestrator actually did.
+      if (result.mode === 'real') useStudioStore.getState().setMockMode(false)
+      else useStudioStore.getState().setMockMode(true)
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err)
       setError(msg)
@@ -106,8 +109,10 @@ const ChatLauncher = () => {
     <section className="panel">
       <header className="panel-header">
         <h2 className="panel-title">Launch Swarm</h2>
-        <span className="font-mono text-[11px] uppercase tracking-wider text-slate-500">
-          {mockMode ? 'mock mode' : 'live'}
+        <span
+          className={`font-mono text-[11px] uppercase tracking-wider ${mockMode ? 'text-slate-500' : 'text-accent'}`}
+        >
+          {mockMode ? 'mock mode' : '● ruflo live'}
         </span>
       </header>
 

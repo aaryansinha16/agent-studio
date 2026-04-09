@@ -10,6 +10,9 @@ cd "$(dirname "$0")/.."
 
 export STUDIO_URL="${STUDIO_URL:-http://localhost:5173}"
 export OVERLAY_URL="${OVERLAY_URL:-http://localhost:5174}"
+# Make sure RUFLO_REAL_MODE is exported so electron-vite → electron → main.ts
+# all see it even if the user set it as a prefix (e.g. RUFLO_REAL_MODE=1 npm run ...).
+export RUFLO_REAL_MODE="${RUFLO_REAL_MODE:-0}"
 
 # CRITICAL: ELECTRON_RUN_AS_NODE=1 in the user's shell environment makes the
 # electron binary behave as plain Node.js, which causes `require('electron')`

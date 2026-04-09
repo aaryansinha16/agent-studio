@@ -1,0 +1,24 @@
+{
+  "name": "@agent-studio/canvas-core",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Shared Pixi.js primitives used by the Studio office scene and the Desktop Overlay",
+  "type": "module",
+  "main": "./src/index.ts",
+  "types": "./src/index.ts",
+  "exports": {
+    ".": {
+      "types": "./src/index.ts",
+      "import": "./src/index.ts",
+      "default": "./src/index.ts"
+    }
+  },
+  "files": ["src"],
+  "scripts": {
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@agent-studio/shared": "0.1.0",
+    "pixi.js": "^7.4.2"
+  }
+}

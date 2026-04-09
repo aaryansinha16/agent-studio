@@ -183,6 +183,21 @@ export interface StudioBridgeApi {
    * the renderer.
    */
   saveProject(project: ProjectSession): void;
+
+  // ── Ruflo lifecycle ──────────────────────────────────────────────────────
+
+  /**
+   * Studio-only: ask the main process whether Ruflo is reachable
+   * on this machine. The result is cached by the orchestrator after
+   * the first call.
+   */
+  checkRuflo(): Promise<boolean>;
+
+  /**
+   * Studio-only: ask the main process to kill the currently running
+   * swarm (child process + file watcher). No-op if nothing is running.
+   */
+  stopSwarm(): Promise<void>;
 }
 
 /**
@@ -224,6 +239,10 @@ export const IPC_CHANNELS = {
   PROJECTS_LIST: 'projects:list',
   /** renderer → main: upsert a project */
   PROJECTS_SAVE: 'projects:save',
+  /** renderer → main (invoke): check if ruflo is available on this machine */
+  RUFLO_CHECK: 'ruflo:check',
+  /** renderer → main (invoke): stop the currently running swarm */
+  SWARM_STOP: 'swarm:stop',
 } as const;
 
 // ─────────────────────────────────────────────────────────────────────────────

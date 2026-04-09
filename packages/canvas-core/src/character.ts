@@ -351,6 +351,7 @@ export class AgentCharacter extends Container {
     this.addChild(this.recoveryCheck)
 
     this.drawStatic()
+    this.drawErrorGlowOnce()
 
     this.eventMode = 'static'
     this.cursor = 'pointer'
@@ -581,14 +582,25 @@ export class AgentCharacter extends Container {
     this.selectionRing.drawEllipse(0, -2, 24, 8)
   }
 
-  /** Draw the pulsing error glow behind the character. */
-  private redrawErrorGlow(pose: Pose): void {
-    this.errorGlow.clear()
+  /**
+   * Draw the error glow circle ONCE at construction time. Per-frame
+   * updates only toggle `alpha` — no `clear()` / `beginFill` /
+   * `drawCircle` overhead, which was the biggest per-frame cost.
+   */
+  private drawErrorGlowOnce(): void {
+    this.errorGlow.beginFill(STATE_ACCENT_COLOR.error, 1)
+    this.errorGlow.drawCircle(0, -CHAR_HEIGHT / 2 + 6, 30)
+    this.errorGlow.endFill()
+    this.errorGlow.alpha = 0
+  }
+
+  /** Per-frame: only update alpha, never redraw the Graphics shape. */
+  private updateErrorGlowAlpha(pose: Pose): void {
     if (pose.showErrorGlow > 0.01) {
-      const alpha = pose.showErrorGlow * (0.45 + 0.25 * Math.sin(this.breathePhase * 0.006))
-      this.errorGlow.beginFill(STATE_ACCENT_COLOR.error, alpha)
-      this.errorGlow.drawCircle(0, -CHAR_HEIGHT / 2 + 6, 30)
-      this.errorGlow.endFill()
+      this.errorGlow.alpha =
+        pose.showErrorGlow * (0.45 + 0.25 * Math.sin(this.breathePhase * 0.006))
+    } else if (this.errorGlow.alpha !== 0) {
+      this.errorGlow.alpha = 0
     }
   }
 
@@ -630,9 +642,9 @@ export class AgentCharacter extends Container {
     this.armL.rotation = pose.armAngleL
     this.armR.rotation = pose.armAngleR
 
-    // Accessories.
+    // Accessories — alpha-only, no Graphics redraws.
     this.clipboard.alpha = pose.showClipboard
-    this.redrawErrorGlow(pose)
+    this.updateErrorGlowAlpha(pose)
 
     // Pulsing "!" when blocked.
     if (pose.showExclaim > 0.01) {

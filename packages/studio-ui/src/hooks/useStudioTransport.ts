@@ -59,6 +59,23 @@ const useElectronTransport = (enabled: boolean): void => {
         store().setConnectionStatus('error', err instanceof Error ? err.message : String(err))
       })
 
+    // Detect whether the main process is in real Ruflo mode so the UI
+    // can show "LIVE" vs "MOCK MODE" before the first launch.
+    bridge
+      .checkRuflo()
+      .then((available) => {
+        if (cancelled) return
+        // Real mode is active when both RUFLO_REAL_MODE=1 AND ruflo is installed.
+        // The checkRuflo result tells us if ruflo was found; the env var is
+        // already baked into the orchestrator's realMode flag. If ruflo is
+        // found, we optimistically set mockMode to false (the launch result
+        // will confirm or flip it back).
+        if (available) store().setMockMode(false)
+      })
+      .catch(() => {
+        // Non-fatal — leave as mock mode.
+      })
+
     // Pull the persisted project list so the Workspace panel's Recent
     // dropdown is populated before the user interacts with it.
     bridge

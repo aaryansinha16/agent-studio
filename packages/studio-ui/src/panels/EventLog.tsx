@@ -1,3 +1,5 @@
+import { useState } from 'react'
+
 import type { StudioEvent } from '@agent-studio/shared'
 
 import { useStudioStore } from '../store/studioStore'
@@ -56,14 +58,33 @@ const summarize = (event: StudioEvent): string => {
   }
 }
 
+/**
+ * Event log panel with a fullscreen toggle.
+ *
+ * In normal mode, the panel sits inside the dashboard grid at whatever
+ * height the layout gives it. When the user clicks the expand button,
+ * the panel renders as a fixed overlay covering the entire viewport so
+ * the full log is readable.
+ */
 const EventLog = () => {
   const log = useStudioStore((s) => s.log)
+  const [expanded, setExpanded] = useState(false)
 
-  return (
-    <section className="panel flex h-full min-h-0 flex-col">
+  const content = (
+    <>
       <header className="panel-header">
         <h2 className="panel-title">Event Log</h2>
-        <span className="font-mono text-xs text-slate-400">{log.length}</span>
+        <div className="flex items-center gap-3">
+          <span className="font-mono text-xs text-slate-400">{log.length}</span>
+          <button
+            type="button"
+            onClick={() => setExpanded((prev) => !prev)}
+            title={expanded ? 'Collapse event log' : 'Expand event log to fullscreen'}
+            className="rounded-md border border-ink-700 px-2 py-0.5 font-mono text-[10px] uppercase tracking-wider text-slate-400 transition hover:bg-ink-800 hover:text-slate-200"
+          >
+            {expanded ? '✕ Close' : '⤢ Expand'}
+          </button>
+        </div>
       </header>
       {log.length === 0 ? (
         <div className="flex flex-1 items-center justify-center px-6 py-12">
@@ -83,6 +104,22 @@ const EventLog = () => {
           ))}
         </ol>
       )}
+    </>
+  )
+
+  if (expanded) {
+    return (
+      <div className="fixed inset-0 z-50 flex flex-col bg-ink-950/95 backdrop-blur-sm">
+        <section className="panel m-4 flex flex-1 flex-col overflow-hidden">
+          {content}
+        </section>
+      </div>
+    )
+  }
+
+  return (
+    <section className="panel flex h-full min-h-0 flex-col">
+      {content}
     </section>
   )
 }

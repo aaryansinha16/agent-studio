@@ -55,7 +55,6 @@ export class LaunchOrchestrator {
   private readonly bridgeClient: BridgeClient
   private readonly realMode: boolean
   private launchCounter = 0
-  private rufloAvailable: boolean | null = null
   private claudeAvailable: boolean | null = null
   /** All running child processes for the active swarm. */
   private activeChildren: ChildProcess[] = []
@@ -128,8 +127,6 @@ export class LaunchOrchestrator {
     const parts = [
       'claude',
       '-p',
-      '--output-format',
-      'stream-json',
       `"${safePrompt}"`,
     ]
     if (params.workspacePath) {
@@ -258,7 +255,7 @@ export class LaunchOrchestrator {
     role: AgentType,
     prompt: string,
     cwd: string,
-    swarmId: string,
+    _swarmId: string,
     onComplete: () => void,
   ): void {
     const taskId = `${agentId}-task`
@@ -289,7 +286,7 @@ export class LaunchOrchestrator {
     })
 
     try {
-      const child = spawn('claude', ['-p', '--output-format', 'stream-json', prompt], {
+      const child = spawn('claude', ['-p', prompt], {
         cwd,
         shell: false,
         env: { ...process.env },
@@ -298,26 +295,23 @@ export class LaunchOrchestrator {
       this.activeChildren.push(child)
       log.info('claude agent spawned', { agentId, pid: child.pid, role })
 
-      // Stream stdout line by line.
+      // Stream stdout line by line — plain text output from claude -p.
       let stdoutBuf = ''
       child.stdout?.on('data', (data: Buffer) => {
         stdoutBuf += data.toString()
         const lines = stdoutBuf.split('\n')
         stdoutBuf = lines.pop() ?? ''
         for (const line of lines) {
-          if (!line.trim()) continue
-          // Try to extract the text content from stream-json format.
-          const text = extractStreamText(line)
-          if (text) {
-            this.emit({
-              type: 'agent:log',
-              timestamp: Date.now(),
-              agentId,
-              line: text,
-              level: 'info',
-              source: 'ruflo-stdout',
-            })
-          }
+          const trimmed = line.trimEnd()
+          if (!trimmed) continue
+          this.emit({
+            type: 'agent:log',
+            timestamp: Date.now(),
+            agentId,
+            line: trimmed,
+            level: 'info',
+            source: 'ruflo-stdout',
+          })
         }
       })
 
@@ -653,54 +647,5 @@ const buildSubPrompt = (
   return `${roleInstructions[role]}\n\nObjective: ${objective}\nStrategy: ${strategy}\n\nWork in the current directory. Create or modify files as needed. Be thorough but focused on your role.`
 }
 
-/**
- * Extract readable text from Claude's stream-json output format.
- *
- * Claude -p --output-format stream-json emits one JSON object per line:
- *   {"type":"assistant","content":[{"type":"text","text":"..."}]}
- *   {"type":"result","result":"..."}
- *
- * We extract the text content for display in the agent's terminal.
- */
-const extractStreamText = (line: string): string | null => {
-  try {
-    const parsed = JSON.parse(line) as Record<string, unknown>
-
-    // Result message (final output).
-    if (parsed.type === 'result' && typeof parsed.result === 'string') {
-      return parsed.result.slice(0, 200)
-    }
-
-    // Assistant content chunks.
-    if (parsed.type === 'assistant' && Array.isArray(parsed.content)) {
-      const texts: string[] = []
-      for (const block of parsed.content) {
-        if (
-          block &&
-          typeof block === 'object' &&
-          'type' in block &&
-          block.type === 'text' &&
-          'text' in block &&
-          typeof block.text === 'string'
-        ) {
-          texts.push(block.text)
-        }
-      }
-      if (texts.length > 0) return texts.join(' ').slice(0, 300)
-    }
-
-    // Content block delta (streaming).
-    if (parsed.type === 'content_block_delta') {
-      const delta = parsed.delta as Record<string, unknown> | undefined
-      if (delta && typeof delta.text === 'string') {
-        return delta.text
-      }
-    }
-
-    return null
-  } catch {
-    // Not JSON — return the raw line trimmed.
-    const trimmed = line.trim()
-    return trimmed.length > 0 ? trimmed : null
-  }
-}
+// extractStreamText removed — we now use plain-text output from
+// `claude -p` instead of stream-json, so no JSON parsing needed.

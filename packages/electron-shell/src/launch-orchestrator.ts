@@ -56,8 +56,9 @@ export class LaunchOrchestrator {
   private readonly realMode: boolean
   private launchCounter = 0
   private rufloAvailable: boolean | null = null
-  /** Currently-running child process (real mode), null in mock mode. */
-  private activeChild: ChildProcess | null = null
+  private claudeAvailable: boolean | null = null
+  /** All running child processes for the active swarm. */
+  private activeChildren: ChildProcess[] = []
   private activeSwarmId: string | null = null
   /** File watcher for the workspace folder (real mode only). */
   private activeWatcher: FSWatcher | null = null
@@ -67,43 +68,44 @@ export class LaunchOrchestrator {
     this.realMode = options.realMode ?? process.env.RUFLO_REAL_MODE === '1'
   }
 
-  /** Check if `ruflo` is reachable on this machine. Cached after first call. */
+  /**
+   * Check if `claude` CLI (Claude Code) is reachable. This is what
+   * actually does the work — Ruflo is optional coordination.
+   */
   checkRufloAvailability(): boolean {
-    if (this.rufloAvailable !== null) return this.rufloAvailable
+    if (this.claudeAvailable !== null) return this.claudeAvailable
     try {
-      execSync('npx claude-flow --version', {
-        timeout: 15_000,
+      execSync('claude --version', {
+        timeout: 10_000,
         stdio: 'pipe',
         env: { ...process.env },
       })
-      this.rufloAvailable = true
-      log.info('Ruflo is available')
+      this.claudeAvailable = true
+      log.info('Claude Code CLI is available — real mode enabled')
     } catch {
-      this.rufloAvailable = false
-      log.info('Ruflo not found — mock mode will be used')
+      this.claudeAvailable = false
+      log.info('Claude Code CLI not found — mock mode will be used')
     }
-    return this.rufloAvailable
+    return this.claudeAvailable
   }
 
-  /** Whether a real swarm process is currently running. */
+  /** Whether any real agent processes are currently running. */
   get isRunning(): boolean {
-    return this.activeChild !== null && !this.activeChild.killed
-  }
-
-  /** PID of the active child process, or null. */
-  get activePid(): number | null {
-    return this.activeChild?.pid ?? null
+    return this.activeChildren.some((c) => !c.killed)
   }
 
   /**
-   * Stop the currently-running swarm (if any). Sends SIGTERM to the
-   * child process, emits swarm:shutdown, and tears down the file watcher.
+   * Stop all running agent processes. Sends SIGTERM to each child,
+   * emits swarm:shutdown, and tears down the file watcher.
    */
   stop(): void {
-    if (this.activeChild && !this.activeChild.killed) {
-      log.info('stopping swarm', { swarmId: this.activeSwarmId, pid: this.activeChild.pid })
-      this.activeChild.kill('SIGTERM')
+    for (const child of this.activeChildren) {
+      if (!child.killed) {
+        log.info('stopping agent process', { pid: child.pid })
+        child.kill('SIGTERM')
+      }
     }
+    this.activeChildren = []
     if (this.activeSwarmId) {
       this.emit({
         type: 'swarm:shutdown',
@@ -112,29 +114,28 @@ export class LaunchOrchestrator {
       })
     }
     this.teardownWatcher()
-    this.activeChild = null
     this.activeSwarmId = null
   }
 
   /**
-   * Build the CLI command for display and for spawn().
+   * Build the CLI command for display in the UI.
    *
-   * Ruflo's actual CLI syntax (from `claude-flow swarm --help`):
-   *   claude-flow swarm start -o "Build API" -s development
+   * In real mode, each agent is a separate `claude -p` process. The
+   * displayed command shows what one agent invocation looks like.
    */
   buildCommand(params: LaunchParams): string {
     const safePrompt = params.prompt.replace(/\\/g, '\\\\').replace(/"/g, '\\"')
     const parts = [
-      'npx',
-      'claude-flow',
-      'swarm',
-      'start',
-      '-o',
+      'claude',
+      '-p',
+      '--output-format',
+      'stream-json',
       `"${safePrompt}"`,
-      '-s',
-      params.strategy,
     ]
-    return parts.join(' ')
+    if (params.workspacePath) {
+      parts.unshift(`cd ${params.workspacePath} &&`)
+    }
+    return `${parts.join(' ')} # × ${params.agentCount} agents`
   }
 
   /** Launch a swarm. Returns once the *initial* burst of events has been sent. */
@@ -171,15 +172,23 @@ export class LaunchOrchestrator {
 
   // ───────────────────────────────────────────────────────────────────────────
 
-  /** The actual scripted timeline — small but covers every event variant. */
   // ── real mode ─────────────────────────────────────────────────────────────
+  //
+  // Ruflo is a coordination layer — it registers agent slots and tracks
+  // tasks but does NOT execute Claude. The actual work is done by spawning
+  // `claude -p --output-format stream-json "<sub-prompt>"` per agent.
+  //
+  // Each agent gets a role-specific sub-prompt derived from the user's
+  // objective. All stdout is streamed back as agent:log events so the UI
+  // can render real terminal output in the inspector.
 
   private launchReal(params: LaunchParams, swarmId: string, command: string): LaunchResult {
-    // Stop any running swarm first.
     if (this.isRunning) this.stop()
 
     this.activeSwarmId = swarmId
+    this.activeChildren = []
     const cwd = params.workspacePath ?? process.cwd()
+    const roles = distributeAgentRoles(params.agentCount)
 
     // Emit swarm:initialized so the UI knows a swarm is starting.
     this.emit({
@@ -188,32 +197,106 @@ export class LaunchOrchestrator {
       swarm: {
         id: swarmId,
         topology: 'hierarchical',
-        agentCount: params.agentCount,
+        agentCount: roles.length,
         status: 'active',
         startedAt: Date.now(),
       },
     })
 
-    const args = [
-      'claude-flow',
-      'swarm',
-      'start',
-      '-o',
-      params.prompt,
-      '-s',
-      params.strategy,
-    ]
+    let completedCount = 0
+    const totalAgents = roles.length
+
+    // Spawn a `claude -p` process per agent role.
+    for (let i = 0; i < roles.length; i += 1) {
+      const role = roles[i]
+      if (!role) continue
+      const agentId = `${swarmId}-${role}-${i}`
+      const agentName = prettyName(role, i)
+      const subPrompt = buildSubPrompt(params.prompt, params.strategy, role, agentName)
+
+      // Emit agent:spawned.
+      const agent: AgentInfo = {
+        id: agentId,
+        name: agentName,
+        type: role,
+        state: 'idle',
+        currentTask: null,
+        spawnedAt: Date.now(),
+        position: { x: i, y: 0 },
+      }
+      this.emit({ type: 'agent:spawned', timestamp: Date.now(), agent })
+      this.emit(stateChange(agentId, 'idle', 'planning'))
+
+      // Stagger spawns slightly so the UI shows them appearing one by one.
+      const delay = i * 600
+      setTimeout(() => {
+        this.spawnClaudeAgent(agentId, agentName, role, subPrompt, cwd, swarmId, () => {
+          completedCount += 1
+          if (completedCount >= totalAgents && this.activeSwarmId === swarmId) {
+            // All agents finished — emit shutdown.
+            this.emit({ type: 'swarm:shutdown', timestamp: Date.now(), swarmId })
+            this.teardownWatcher()
+            this.activeSwarmId = null
+          }
+        })
+      }, delay)
+    }
+
+    // Start the workspace file watcher.
+    this.startWatcher(cwd, swarmId)
+
+    return { ok: true, command, mode: 'real', swarmId }
+  }
+
+  /**
+   * Spawn a single `claude -p` process for one agent. Streams its output
+   * back as agent:log events and emits task lifecycle events.
+   */
+  private spawnClaudeAgent(
+    agentId: string,
+    agentName: string,
+    role: AgentType,
+    prompt: string,
+    cwd: string,
+    swarmId: string,
+    onComplete: () => void,
+  ): void {
+    const taskId = `${agentId}-task`
+
+    // Emit task:started + coding state.
+    this.emit({
+      type: 'task:started',
+      timestamp: Date.now(),
+      task: {
+        id: taskId,
+        description: prompt.slice(0, 120),
+        assignedAgent: agentId,
+        status: 'active',
+        startedAt: Date.now(),
+        completedAt: null,
+      },
+    })
+    this.emit(stateChange(agentId, 'planning', role === 'tester' ? 'testing' : 'coding'))
+
+    // Log the start.
+    this.emit({
+      type: 'agent:log',
+      timestamp: Date.now(),
+      agentId,
+      line: `[${agentName}] starting: claude -p ...`,
+      level: 'info',
+      source: 'system',
+    })
 
     try {
-      const child = spawn('npx', args, {
+      const child = spawn('claude', ['-p', '--output-format', 'stream-json', prompt], {
         cwd,
-        shell: true,
+        shell: false,
         env: { ...process.env },
         stdio: ['ignore', 'pipe', 'pipe'],
       })
-      this.activeChild = child
-
-      log.info('ruflo process spawned', { pid: child.pid, swarmId, command })
+      this.activeChildren.push(child)
+      log.info('claude agent spawned', { agentId, pid: child.pid, role })
 
       // Stream stdout line by line.
       let stdoutBuf = ''
@@ -222,8 +305,18 @@ export class LaunchOrchestrator {
         const lines = stdoutBuf.split('\n')
         stdoutBuf = lines.pop() ?? ''
         for (const line of lines) {
-          if (line.trim()) {
-            this.parseRufloLine(line, swarmId, 'ruflo-stdout')
+          if (!line.trim()) continue
+          // Try to extract the text content from stream-json format.
+          const text = extractStreamText(line)
+          if (text) {
+            this.emit({
+              type: 'agent:log',
+              timestamp: Date.now(),
+              agentId,
+              line: text,
+              level: 'info',
+              source: 'ruflo-stdout',
+            })
           }
         }
       })
@@ -235,92 +328,79 @@ export class LaunchOrchestrator {
         const lines = stderrBuf.split('\n')
         stderrBuf = lines.pop() ?? ''
         for (const line of lines) {
-          if (line.trim()) {
-            this.parseRufloLine(line, swarmId, 'ruflo-stderr')
-          }
+          if (!line.trim()) continue
+          this.emit({
+            type: 'agent:log',
+            timestamp: Date.now(),
+            agentId,
+            line: line.trim(),
+            level: 'warn',
+            source: 'ruflo-stderr',
+          })
         }
       })
 
-      child.on('exit', (code, signal) => {
-        log.info('ruflo process exited', { pid: child.pid, code, signal, swarmId })
-        this.emit({
-          type: 'swarm:shutdown',
-          timestamp: Date.now(),
-          swarmId,
-        })
-        this.teardownWatcher()
-        this.activeChild = null
-        this.activeSwarmId = null
-      })
+      child.on('exit', (code) => {
+        const success = code === 0
+        log.info('claude agent exited', { agentId, code, role })
 
-      child.on('error', (err) => {
-        log.error('ruflo process error', { error: err.message, swarmId })
         this.emit({
           type: 'agent:log',
           timestamp: Date.now(),
-          agentId: null,
+          agentId,
+          line: `[${agentName}] ${success ? 'completed' : `exited with code ${code}`}`,
+          level: success ? 'info' : 'error',
+          source: 'system',
+        })
+
+        if (success) {
+          this.emit({ type: 'task:completed', timestamp: Date.now(), taskId, agentId })
+        } else {
+          this.emit({
+            type: 'task:failed',
+            timestamp: Date.now(),
+            taskId,
+            agentId,
+            error: `process exited with code ${code}`,
+          })
+        }
+        this.emit(stateChange(agentId, role === 'tester' ? 'testing' : 'coding', 'idle'))
+        onComplete()
+      })
+
+      child.on('error', (err) => {
+        log.error('claude agent error', { agentId, error: err.message })
+        this.emit({
+          type: 'agent:log',
+          timestamp: Date.now(),
+          agentId,
           line: `[system] process error: ${err.message}`,
           level: 'error',
           source: 'system',
         })
+        this.emit({
+          type: 'task:failed',
+          timestamp: Date.now(),
+          taskId,
+          agentId,
+          error: err.message,
+        })
+        this.emit(stateChange(agentId, role === 'tester' ? 'testing' : 'coding', 'error'))
+        onComplete()
       })
-
-      // Start the workspace file watcher.
-      this.startWatcher(cwd, swarmId)
-
-      return { ok: true, command, mode: 'real', swarmId }
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err)
-      log.error('failed to spawn ruflo', { error: msg })
-      return { ok: false, command, mode: 'real', swarmId, error: msg }
+      log.error('failed to spawn claude agent', { agentId, error: msg })
+      this.emit({
+        type: 'task:failed',
+        timestamp: Date.now(),
+        taskId,
+        agentId,
+        error: msg,
+      })
+      this.emit(stateChange(agentId, 'planning', 'error'))
+      onComplete()
     }
-  }
-
-  /**
-   * Best-effort parser for Ruflo stdout/stderr. Tries to detect
-   * structured agent events; everything else becomes an `agent:log` line.
-   * The exact patterns depend on Ruflo's output format — we refine
-   * as we learn.
-   */
-  private parseRufloLine(
-    line: string,
-    swarmId: string,
-    source: 'ruflo-stdout' | 'ruflo-stderr',
-  ): void {
-    const ts = Date.now()
-    const lower = line.toLowerCase()
-
-    // Attempt to parse as JSON (some Ruflo versions emit structured JSON).
-    try {
-      const parsed = JSON.parse(line) as Record<string, unknown>
-      if (typeof parsed.type === 'string' && typeof parsed.timestamp === 'number') {
-        // Looks like a StudioEvent — forward it directly.
-        this.bridgeClient.sendEvent(parsed as unknown as StudioEvent, 'ruflo-real')
-        return
-      }
-    } catch {
-      // Not JSON — continue with text heuristics below.
-    }
-
-    // Heuristic patterns for common Ruflo output lines.
-    if (lower.includes('spawned agent') || lower.includes('agent spawn')) {
-      const level = 'info' as const
-      this.emit({ type: 'agent:log', timestamp: ts, agentId: null, line, level, source })
-      return
-    }
-
-    if (lower.includes('error') || lower.includes('failed') || lower.includes('exception')) {
-      this.emit({ type: 'agent:log', timestamp: ts, agentId: null, line, level: 'error', source })
-      return
-    }
-
-    if (lower.includes('warn')) {
-      this.emit({ type: 'agent:log', timestamp: ts, agentId: null, line, level: 'warn', source })
-      return
-    }
-
-    // Default: info-level log line.
-    this.emit({ type: 'agent:log', timestamp: ts, agentId: null, line, level: 'info', source })
   }
 
   // ── file watcher ─────────────────────────────────────────────────────────
@@ -552,3 +632,75 @@ const stateChange = (
 const truncate = (s: string, n: number): string => (s.length > n ? `${s.slice(0, n - 1)}…` : s)
 
 const sleep = (ms: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms))
+
+/**
+ * Build a role-specific sub-prompt for a single claude -p invocation.
+ * The prompt tells the agent what role it plays and what to focus on.
+ */
+const buildSubPrompt = (
+  objective: string,
+  strategy: string,
+  role: AgentType,
+  name: string,
+): string => {
+  const roleInstructions: Record<AgentType, string> = {
+    architect: `You are ${name}, the system architect. Design the high-level approach, file structure, and architecture. Then implement the key structural files.`,
+    coder: `You are ${name}, a developer. Implement the feature described below. Write clean, working code with proper error handling.`,
+    tester: `You are ${name}, a QA engineer. Write comprehensive tests for the feature described below. Include unit tests and integration tests.`,
+    researcher: `You are ${name}, a tech lead. Research best practices, review the approach, and implement any supporting utilities needed.`,
+    coordinator: `You are ${name}, the project coordinator. Review the overall progress, ensure all parts fit together, and fix any integration issues.`,
+  }
+  return `${roleInstructions[role]}\n\nObjective: ${objective}\nStrategy: ${strategy}\n\nWork in the current directory. Create or modify files as needed. Be thorough but focused on your role.`
+}
+
+/**
+ * Extract readable text from Claude's stream-json output format.
+ *
+ * Claude -p --output-format stream-json emits one JSON object per line:
+ *   {"type":"assistant","content":[{"type":"text","text":"..."}]}
+ *   {"type":"result","result":"..."}
+ *
+ * We extract the text content for display in the agent's terminal.
+ */
+const extractStreamText = (line: string): string | null => {
+  try {
+    const parsed = JSON.parse(line) as Record<string, unknown>
+
+    // Result message (final output).
+    if (parsed.type === 'result' && typeof parsed.result === 'string') {
+      return parsed.result.slice(0, 200)
+    }
+
+    // Assistant content chunks.
+    if (parsed.type === 'assistant' && Array.isArray(parsed.content)) {
+      const texts: string[] = []
+      for (const block of parsed.content) {
+        if (
+          block &&
+          typeof block === 'object' &&
+          'type' in block &&
+          block.type === 'text' &&
+          'text' in block &&
+          typeof block.text === 'string'
+        ) {
+          texts.push(block.text)
+        }
+      }
+      if (texts.length > 0) return texts.join(' ').slice(0, 300)
+    }
+
+    // Content block delta (streaming).
+    if (parsed.type === 'content_block_delta') {
+      const delta = parsed.delta as Record<string, unknown> | undefined
+      if (delta && typeof delta.text === 'string') {
+        return delta.text
+      }
+    }
+
+    return null
+  } catch {
+    // Not JSON — return the raw line trimmed.
+    const trimmed = line.trim()
+    return trimmed.length > 0 ? trimmed : null
+  }
+}

@@ -127,6 +127,7 @@ export class LaunchOrchestrator {
     const parts = [
       'claude',
       '-p',
+      '--dangerously-skip-permissions',
       `"${safePrompt}"`,
     ]
     if (params.workspacePath) {
@@ -286,7 +287,7 @@ export class LaunchOrchestrator {
     })
 
     try {
-      const child = spawn('claude', ['-p', prompt], {
+      const child = spawn('claude', ['-p', '--dangerously-skip-permissions', prompt], {
         cwd,
         shell: false,
         env: { ...process.env },

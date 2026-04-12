@@ -8,3 +8,4 @@
 export * from './palette.js'
 export * from './character.js'
 export * from './speech-bubble.js'
+export * from './sprite-loader.js'

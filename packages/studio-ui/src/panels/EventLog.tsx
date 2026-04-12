@@ -16,6 +16,7 @@ const eventColor: Record<StudioEvent['type'], string> = {
   'message:sent': 'text-violet-300',
   'agent:log': 'text-slate-400',
   'file:changed': 'text-cyan-300',
+  'metrics:update': 'text-amber-200',
 }
 
 const formatTime = (ms: number): string => {
@@ -55,6 +56,8 @@ const summarize = (event: StudioEvent): string => {
       return `${event.agentId ?? 'swarm'}: ${event.line}`
     case 'file:changed':
       return `${event.changeType} ${event.filePath}`
+    case 'metrics:update':
+      return `${event.agentId ?? 'swarm'}: ${event.inputTokens} in / ${event.outputTokens} out${event.costUsd > 0 ? ` · $${event.costUsd.toFixed(3)}` : ''}`
   }
 }
 

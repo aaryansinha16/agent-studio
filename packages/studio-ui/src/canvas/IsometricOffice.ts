@@ -46,11 +46,14 @@ import {
   SpeechBubble,
   cosmeticsForIndex,
   easeInOutQuad,
+  loadOfficeAssets,
+  type OfficeAssets,
 } from '@agent-studio/canvas-core'
 import type {
   AgentInfo,
   AgentMessage,
   AgentState,
+  AgentType,
   StudioEvent,
 } from '@agent-studio/shared'
 
@@ -146,6 +149,13 @@ interface ActiveBubble {
 export interface IsometricOfficeOptions {
   onSelectAgent?: (id: string) => void
   onDeselect?: () => void
+  /**
+   * Base URL prefix for sprite assets. Defaults to '/assets/sprites'
+   * which works with Vite's public folder serving. If sprite-manifest.json
+   * isn't reachable there, the scene silently falls back to programmatic
+   * rendering.
+   */
+  spritesBaseUrl?: string
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -183,6 +193,9 @@ export class IsometricOffice {
   private flashRemaining = 0
   private nextWatercoolerAt = 0
   private currentWatercoolerAgentId: string | null = null
+
+  // Sprite assets (null until loaded or if manifest is unavailable).
+  private spriteAssets: OfficeAssets | null = null
 
   // FPS counter — visible during dev, removed before ship.
   private fpsText: Text | null = null
@@ -231,7 +244,20 @@ export class IsometricOffice {
 
     app.stage.addChild(this.world)
 
+    // Try to load sprite assets from the manifest. If anything fails,
+    // `spriteAssets` stays null and the scene falls back to the
+    // programmatic RenderTexture bake below.
+    const spritesBase = this.options.spritesBaseUrl ?? '/assets/sprites'
+    try {
+      this.spriteAssets = await loadOfficeAssets(spritesBase)
+    } catch {
+      this.spriteAssets = null
+    }
+
     // Bake the static background ONCE — this is the big perf win.
+    // In sprite mode, the bake composites the background PNG + all
+    // furniture sprites into one texture. In procedural mode, it
+    // falls back to drawing everything as Graphics.
     this.backgroundSprite = this.bakeBackground(app)
     this.world.addChild(this.backgroundSprite)
 
@@ -457,17 +483,27 @@ export class IsometricOffice {
    * Render every static element into a RenderTexture and return a
    * single Sprite that displays it. After this call, the input
    * container is destroyed — only the texture remains in memory.
+   *
+   * Two paths:
+   *   - Sprite mode (assets loaded): composite the background PNG +
+   *     placed furniture sprites into a single RenderTexture.
+   *   - Procedural mode: draw everything with Graphics primitives.
    */
   private bakeBackground(app: Application): Sprite {
     const bg = new Container()
-    this.drawCeiling(bg)
-    this.drawBackWall(bg)
-    this.drawFloor(bg)
-    this.drawBookshelf(bg)
-    this.drawFilingCabinet(bg)
-    this.drawTrashCan(bg)
-    this.drawWatercooler(bg)
-    this.drawStaticDesks(bg)
+
+    if (this.spriteAssets) {
+      this.composeSpriteBackground(bg, this.spriteAssets)
+    } else {
+      this.drawCeiling(bg)
+      this.drawBackWall(bg)
+      this.drawFloor(bg)
+      this.drawBookshelf(bg)
+      this.drawFilingCabinet(bg)
+      this.drawTrashCan(bg)
+      this.drawWatercooler(bg)
+      this.drawStaticDesks(bg)
+    }
 
     const texture = RenderTexture.create({
       width: WORLD_WIDTH,
@@ -481,6 +517,82 @@ export class IsometricOffice {
     sprite.x = 0
     sprite.y = 0
     return sprite
+  }
+
+  /**
+   * Compose the sprite-based static layer: stretch the background PNG
+   * across the world, then place individual furniture sprites on top
+   * at fixed positions. Called from bakeBackground when sprite assets
+   * are available. Everything gets flattened into one RenderTexture.
+   */
+  private composeSpriteBackground(parent: Container, assets: OfficeAssets): void {
+    // 1. Background image — stretched to fill the entire world.
+    const bgSprite = new Sprite(assets.background)
+    bgSprite.width = WORLD_WIDTH
+    bgSprite.height = WORLD_HEIGHT
+    parent.addChild(bgSprite)
+
+    // 2. Wall fixtures. Use sprite if present, skip silently otherwise.
+    // Each placement is: [furniture name, x, y, anchor-y (0=top, 1=bottom)]
+    const wallPlacements: Array<[string, number, number, number]> = [
+      ['window', 300, 240, 0.5],
+      ['poster-ship-it', 680, 230, 0.5],
+      ['clock', 920, 240, 0.5],
+      ['whiteboard', 500, 380, 1],
+    ]
+    for (const [name, x, y, anchorY] of wallPlacements) {
+      const tex = assets.furniture.get(name)
+      if (!tex) continue
+      const s = new Sprite(tex)
+      s.anchor.set(0.5, anchorY)
+      s.x = x
+      s.y = y
+      parent.addChild(s)
+    }
+
+    // 3. Floor fixtures along the back wall — bookshelf + filing cabinet.
+    const floorFixtures: Array<[string, number, number]> = [
+      ['bookshelf', 100, WORLD_HEIGHT - 40],
+      ['filing-cabinet', 220, WORLD_HEIGHT - 40],
+      ['plant', 1640, WORLD_HEIGHT - 40],
+      ['water-cooler', WATERCOOLER_X, WATERCOOLER_Y + 90],
+      ['trash-can', 1700, WORLD_HEIGHT - 40],
+      ['ceiling-light', WORLD_WIDTH / 2, 30],
+    ]
+    for (const [name, x, y] of floorFixtures) {
+      const tex = assets.furniture.get(name)
+      if (!tex) continue
+      const s = new Sprite(tex)
+      s.anchor.set(0.5, 1) // bottom-center so things sit on their y line
+      s.x = x
+      s.y = y
+      parent.addChild(s)
+    }
+
+    // 4. Desks + chairs at every desk slot.
+    const deskTex = assets.furniture.get('desk')
+    const chairTex = assets.furniture.get('chair')
+    for (let row = 0; row < DESK_ROW_Y.length; row += 1) {
+      const rowY = DESK_ROW_Y[row]
+      if (rowY === undefined) continue
+      for (let col = 0; col < DESK_COLS; col += 1) {
+        const x = DESK_ORIGIN_X + col * DESK_COL_SPACING
+        if (chairTex) {
+          const chair = new Sprite(chairTex)
+          chair.anchor.set(0.5, 1)
+          chair.x = x
+          chair.y = rowY - 20
+          parent.addChild(chair)
+        }
+        if (deskTex) {
+          const desk = new Sprite(deskTex)
+          desk.anchor.set(0.5, 1)
+          desk.x = x
+          desk.y = rowY + 30
+          parent.addChild(desk)
+        }
+      }
+    }
   }
 
   private drawCeiling(parent: Container): void {
@@ -989,7 +1101,12 @@ export class IsometricOffice {
     const desk = this.nextAvailableDesk()
     const cosmeticIndex = this.cosmeticCounter++
     const cosmetics = cosmeticsForIndex(cosmeticIndex)
-    const character = new AgentCharacter(info, cosmetics)
+    // In sprite mode, grab the character variant for this agent's role.
+    const spriteSet = this.spriteAssets?.characters.get(info.type as AgentType)
+    const character = new AgentCharacter(info, {
+      ...cosmetics,
+      ...(spriteSet ? { sprites: spriteSet } : {}),
+    })
     character.on('pointerdown', (event) => {
       event.stopPropagation()
       this.options.onSelectAgent?.(info.id)

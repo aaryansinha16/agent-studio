@@ -79,6 +79,7 @@ const SwarmOverview = () => {
         <Stat label="Idle" value={counts.idle} />
         <Stat label="Blocked" value={counts.blocked} />
       </div>
+      <MetricsRow />
       <div className="border-t border-ink-700 px-4 py-3 text-xs text-slate-500">
         <div className="flex flex-wrap items-center justify-between gap-3 font-mono">
           <span>
@@ -90,6 +91,46 @@ const SwarmOverview = () => {
         </div>
       </div>
     </section>
+  )
+}
+
+const formatTokens = (n: number): string => {
+  if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(1)}M`
+  if (n >= 1_000) return `${(n / 1_000).toFixed(1)}K`
+  return String(n)
+}
+
+const MetricsRow = () => {
+  const inputTokens = useStudioStore((s) => s.swarmInputTokens)
+  const outputTokens = useStudioStore((s) => s.swarmOutputTokens)
+  const cost = useStudioStore((s) => s.swarmCostUsd)
+  const model = useStudioStore((s) => s.swarmModel)
+  const hasMetrics = inputTokens > 0 || outputTokens > 0 || cost > 0
+
+  if (!hasMetrics) return null
+
+  return (
+    <div className="border-t border-ink-700 px-4 py-3">
+      <div className="flex flex-wrap items-center gap-4 font-mono text-xs text-slate-400">
+        <span>
+          <span className="uppercase tracking-wider text-slate-500">tokens </span>
+          <span className="text-slate-200">{formatTokens(inputTokens)}</span>
+          <span className="text-slate-600"> in · </span>
+          <span className="text-slate-200">{formatTokens(outputTokens)}</span>
+          <span className="text-slate-600"> out</span>
+        </span>
+        <span>
+          <span className="uppercase tracking-wider text-slate-500">cost </span>
+          <span className="text-accent">~${cost.toFixed(2)}</span>
+        </span>
+        {model ? (
+          <span>
+            <span className="uppercase tracking-wider text-slate-500">model </span>
+            <span className="text-slate-200">{model}</span>
+          </span>
+        ) : null}
+      </div>
+    </div>
   )
 }
 

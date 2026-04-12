@@ -31,7 +31,7 @@ import type {
   WorkspaceInfo,
   WorldSnapshot,
 } from '@agent-studio/shared'
-import { MAX_MESSAGE_HISTORY } from '@agent-studio/shared'
+import { MAX_MESSAGE_HISTORY, estimateCostUsd } from '@agent-studio/shared'
 
 export type ConnectionStatus = 'idle' | 'connecting' | 'connected' | 'disconnected' | 'error'
 
@@ -107,6 +107,17 @@ interface StudioState {
   agentLogs: Map<string, AgentLogLine[]>
   agentFiles: Map<string, AgentFileEntry[]>
   mockMode: boolean
+
+  // ── metrics ───────────────────────────────────────────────────────────────
+  /** Per-agent cumulative token counters. */
+  agentTokens: Map<string, { inputTokens: number; outputTokens: number; model: string | null }>
+  /** Swarm-wide aggregate cost. */
+  swarmCostUsd: number
+  /** Swarm-wide aggregate token totals. */
+  swarmInputTokens: number
+  swarmOutputTokens: number
+  /** Detected model tier (from the latest metrics:update). */
+  swarmModel: string | null
 
   // ── multi-project state ──────────────────────────────────────────────────
   projects: Map<string, ProjectSession>
@@ -269,6 +280,13 @@ export const useStudioStore = create<StudioState>((set, get) => ({
   agentFiles: new Map(),
   mockMode: true,
 
+  // metrics
+  agentTokens: new Map(),
+  swarmCostUsd: 0,
+  swarmInputTokens: 0,
+  swarmOutputTokens: 0,
+  swarmModel: null,
+
   // multi-project state
   projects: new Map(),
   activeProjectId: null,
@@ -298,6 +316,12 @@ export const useStudioStore = create<StudioState>((set, get) => ({
         set({
           swarm: event.swarm,
           startedAt: event.swarm.startedAt,
+          // Reset metrics for the new swarm.
+          agentTokens: new Map(),
+          swarmCostUsd: 0,
+          swarmInputTokens: 0,
+          swarmOutputTokens: 0,
+          swarmModel: null,
           log: pushLogged(state.log, event),
         })
         return
@@ -355,7 +379,39 @@ export const useStudioStore = create<StudioState>((set, get) => ({
           if (nextList) agentFiles.set(event.agentId, nextList)
         }
 
-        set({ agents, agentLogs, agentFiles, log: pushLogged(state.log, event) })
+        // In mock mode, synthesize plausible token metrics per state change.
+        let agentTokens = state.agentTokens
+        let swarmInputTokens = state.swarmInputTokens
+        let swarmOutputTokens = state.swarmOutputTokens
+        let swarmCostUsd = state.swarmCostUsd
+        const swarmModel = state.swarmModel ?? 'sonnet-4.6'
+        if (state.mockMode && event.newState !== 'idle') {
+          const mockIn = 500 + Math.floor(Math.random() * 1500)
+          const mockOut = 200 + Math.floor(Math.random() * 800)
+          const mockCost = estimateCostUsd(mockIn, mockOut, swarmModel)
+          agentTokens = new Map(state.agentTokens)
+          const prev = agentTokens.get(event.agentId) ?? { inputTokens: 0, outputTokens: 0, model: null }
+          agentTokens.set(event.agentId, {
+            inputTokens: prev.inputTokens + mockIn,
+            outputTokens: prev.outputTokens + mockOut,
+            model: swarmModel,
+          })
+          swarmInputTokens += mockIn
+          swarmOutputTokens += mockOut
+          swarmCostUsd += mockCost
+        }
+
+        set({
+          agents,
+          agentLogs,
+          agentFiles,
+          agentTokens,
+          swarmInputTokens,
+          swarmOutputTokens,
+          swarmCostUsd,
+          swarmModel,
+          log: pushLogged(state.log, event),
+        })
         return
       }
       case 'agent:terminated': {
@@ -524,6 +580,33 @@ export const useStudioStore = create<StudioState>((set, get) => ({
           appendAgentFile(state.agentFiles.get(globalKey), event.filePath, kind),
         )
         set({ agentFiles, log: pushLogged(state.log, event) })
+        return
+      }
+      case 'metrics:update': {
+        // Accumulate token counts per agent and swarm-wide.
+        const agentTokens = new Map(state.agentTokens)
+        if (event.agentId) {
+          const prev = agentTokens.get(event.agentId) ?? {
+            inputTokens: 0,
+            outputTokens: 0,
+            model: null,
+          }
+          agentTokens.set(event.agentId, {
+            inputTokens: prev.inputTokens + event.inputTokens,
+            outputTokens: prev.outputTokens + event.outputTokens,
+            model: event.model ?? prev.model,
+          })
+        }
+        const newInput = state.swarmInputTokens + event.inputTokens
+        const newOutput = state.swarmOutputTokens + event.outputTokens
+        set({
+          agentTokens,
+          swarmInputTokens: newInput,
+          swarmOutputTokens: newOutput,
+          swarmCostUsd: state.swarmCostUsd + event.costUsd,
+          swarmModel: event.model ?? state.swarmModel,
+          log: pushLogged(state.log, event),
+        })
         return
       }
     }

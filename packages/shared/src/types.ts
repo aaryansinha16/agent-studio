@@ -246,6 +246,32 @@ export interface FileChangedEvent extends BaseEvent {
   swarmId: string;
 }
 
+// ─────────────────────────────────────────────────────────────────────────────
+// Token / cost metrics
+// ─────────────────────────────────────────────────────────────────────────────
+
+/** Cumulative token usage for an agent or a swarm. */
+export interface TokenUsage {
+  inputTokens: number;
+  outputTokens: number;
+  cacheReadTokens: number;
+  cacheWriteTokens: number;
+  totalTokens: number;
+  /** Estimated cost in USD based on approximate model pricing. */
+  estimatedCostUsd: number;
+}
+
+/** Incremental metrics update emitted as stdout is parsed. */
+export interface MetricsUpdateEvent extends BaseEvent {
+  type: 'metrics:update';
+  agentId: string | null;
+  swarmId: string;
+  model: string | null;
+  inputTokens: number;
+  outputTokens: number;
+  costUsd: number;
+}
+
 /** Discriminated union of every event type the system can emit. */
 export type StudioEvent =
   | AgentSpawnedEvent
@@ -258,7 +284,8 @@ export type StudioEvent =
   | SwarmShutdownEvent
   | MessageSentEvent
   | AgentLogEvent
-  | FileChangedEvent;
+  | FileChangedEvent
+  | MetricsUpdateEvent;
 
 export type StudioEventType = StudioEvent['type'];
 

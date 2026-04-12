@@ -13,6 +13,7 @@
     "dev:mock": "bash scripts/dev-mock.sh",
     "dev:electron": "bash scripts/dev-electron.sh",
     "mock": "concurrently -n bridge,mock -c cyan,yellow --kill-others-on-fail \"npm run dev -w @agent-studio/event-bridge\" \"sleep 1 && tsx scripts/mock-events.ts\"",
+    "process-sprites": "tsx scripts/process-sprites.ts",
     "build": "tsc --build && npm run typecheck -w @agent-studio/studio-ui && npm run typecheck -w @agent-studio/desktop-overlay && npm run typecheck -w @agent-studio/electron-shell && npm run build -w @agent-studio/studio-ui && npm run build -w @agent-studio/desktop-overlay && npm run build -w @agent-studio/electron-shell",
     "clean": "tsc --build --clean && rm -rf packages/studio-ui/dist packages/desktop-overlay/dist packages/electron-shell/out",
     "test": "vitest run",
@@ -28,6 +29,7 @@
     "concurrently": "^8.2.2",
     "eslint": "^8.57.0",
     "prettier": "^3.2.5",
+    "sharp": "^0.34.5",
     "tsx": "^4.7.2",
     "typescript": "^5.5.4",
     "vitest": "^1.5.0"

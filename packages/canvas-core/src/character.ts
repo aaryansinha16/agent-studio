@@ -19,9 +19,11 @@
  * the pulsing "!" badge are additive wiggles layered on top.
  */
 
-import { Container, Graphics, Text } from 'pixi.js'
+import { Container, Graphics, Sprite, Text } from 'pixi.js'
 
 import type { AgentInfo, AgentState, AgentType } from '@agent-studio/shared'
+
+import type { CharacterSpriteSet } from './sprite-loader.js'
 
 import {
   HAIR_COLOR_POOL,
@@ -74,10 +76,16 @@ export interface AgentCharacterOptions {
   hairStyle?: 0 | 1 | 2
   /** Color stripe for the name tag on the torso. */
   nameTagColor?: number
+  /**
+   * When provided, the character uses sprite-based rendering instead of
+   * programmatic Graphics. The caller loads sprites via `loadCharacterSprites`
+   * and passes the matching set here.
+   */
+  sprites?: CharacterSpriteSet
 }
 
 /** Convenience helper — pick deterministic cosmetics for an agent index. */
-export const cosmeticsForIndex = (index: number): Required<AgentCharacterOptions> => {
+export const cosmeticsForIndex = (index: number): Omit<Required<AgentCharacterOptions>, 'sprites'> => {
   const shirtColor = SHIRT_COLOR_POOL[index % SHIRT_COLOR_POOL.length] ?? 0x60a5fa
   const hairColor = HAIR_COLOR_POOL[index % HAIR_COLOR_POOL.length] ?? 0x8b5e3c
   const style = (index % 3) as 0 | 1 | 2
@@ -126,6 +134,8 @@ interface Pose {
   armAngleR: number
   /** Whether the leg pair is contracted (sitting) or extended (standing). */
   sitting: number // 0..1
+  /** Body tilt in radians — positive tilts right. Used for BLOCKED slump. */
+  bodyTilt: number
   /** Accessory alphas. */
   showExclaim: number
   showErrorGlow: number
@@ -140,6 +150,7 @@ const basePose = (): Pose => ({
   armAngleL: 0,
   armAngleR: 0,
   sitting: 1,
+  bodyTilt: 0,
   showExclaim: 0,
   showErrorGlow: 0,
   showClipboard: 0,
@@ -170,9 +181,9 @@ const POSE_BY_STATE: Record<AgentState, Pose> = {
     ...basePose(),
     sitting: 1,
     headOffsetY: 5,
-    // Arms drop off the desk: negative angles swing them downward.
     armAngleL: -0.9,
     armAngleR: -0.9,
+    bodyTilt: 0.05,
     showExclaim: 1,
   },
   error: {
@@ -205,6 +216,7 @@ const lerpPose = (from: Pose, to: Pose, t: number): Pose => ({
   armAngleL: lerp(from.armAngleL, to.armAngleL, t),
   armAngleR: lerp(from.armAngleR, to.armAngleR, t),
   sitting: lerp(from.sitting, to.sitting, t),
+  bodyTilt: lerp(from.bodyTilt, to.bodyTilt, t),
   showExclaim: lerp(from.showExclaim, to.showExclaim, t),
   showErrorGlow: lerp(from.showErrorGlow, to.showErrorGlow, t),
   showClipboard: lerp(from.showClipboard, to.showClipboard, t),
@@ -224,6 +236,14 @@ export class AgentCharacter extends Container {
   private readonly nameTagColor: number
   private agentName: string
   private _state: AgentState
+
+  /**
+   * 'graphics' = current programmatic rendering (default).
+   * 'sprite' = texture-based rendering when a CharacterSpriteSet is provided.
+   */
+  readonly renderMode: 'graphics' | 'sprite'
+  private readonly sprites: CharacterSpriteSet | null = null
+  private spriteNode: Sprite | null = null
 
   // Visual layers
   private readonly shadow = new Graphics()
@@ -283,6 +303,22 @@ export class AgentCharacter extends Container {
     this.breatheOffset = (hash % 1000) / 1000 // 0..1
     this.breatheSpeedJitter = 0.85 + ((hash >> 10) % 30) / 100 // 0.85..1.15
 
+    // Sprite mode — if a CharacterSpriteSet is provided, use it.
+    // Pick the initial pose from the agent's starting state.
+    if (options.sprites) {
+      this.renderMode = 'sprite'
+      this.sprites = options.sprites
+      const initialTexture =
+        stateToTexture(info.state, options.sprites) ?? options.sprites.standing
+      this.spriteNode = new Sprite(initialTexture)
+      // Anchor at bottom-center so sprites sit on the floor line and
+      // scale from their feet instead of their middle.
+      this.spriteNode.anchor.set(0.5, 1)
+      this.addChild(this.spriteNode)
+    } else {
+      this.renderMode = 'graphics'
+    }
+
     // Back-to-front z order.
     this.addChild(this.shadow)
     this.addChild(this.errorGlow)
@@ -310,14 +346,19 @@ export class AgentCharacter extends Container {
       fontWeight: '500',
       fill: 0xffffff,
       align: 'center',
-      dropShadow: true,
-      dropShadowColor: 0x000000,
-      dropShadowBlur: 3,
-      dropShadowDistance: 1,
-      dropShadowAlpha: 0.85,
     })
     this.nameLabel.anchor.set(0.5, 0)
     this.nameLabel.y = 14
+
+    // Dark pill background behind the name label for readability on any
+    // background (office floor, desktop wallpaper, etc.).
+    const namePill = new Graphics()
+    const pillW = this.nameLabel.width + 10
+    const pillH = this.nameLabel.height + 4
+    namePill.beginFill(0x0a0e14, 0.6)
+    namePill.drawRoundedRect(-pillW / 2, 12, pillW, pillH, 4)
+    namePill.endFill()
+    this.addChild(namePill)
     this.addChild(this.nameLabel)
 
     this.exclaim = new Text('!', {
@@ -386,6 +427,13 @@ export class AgentCharacter extends Container {
     if ((prev === 'blocked' || prev === 'error') && next !== 'blocked' && next !== 'error') {
       this.recoveryRemaining = RECOVERY_FLASH_DURATION_MS
     }
+    // In sprite mode, swap the texture to match the new state — but
+    // only if we're not currently walking (walking textures take
+    // precedence until the character stops).
+    if (this.spriteNode && this.sprites && !this.walking) {
+      const tex = stateToTexture(next, this.sprites)
+      if (tex) this.spriteNode.texture = tex
+    }
   }
 
   /** Replace the displayed name. */
@@ -406,7 +454,16 @@ export class AgentCharacter extends Container {
   setFacing(direction: -1 | 1): void {
     this.facing = direction
     this.rig.scale.x = direction
-    this.nameLabel.scale.x = direction === -1 ? -1 : 1
+    // Sprite mode: swap walk texture if we're walking, otherwise just
+    // flip the horizontal scale of the standing/sitting sprite.
+    if (this.renderMode === 'sprite' && this.spriteNode && this.sprites) {
+      if (this.walking) {
+        this.spriteNode.texture = direction === 1 ? this.sprites.walkRight : this.sprites.walkLeft
+        this.spriteNode.scale.x = 1
+      } else {
+        this.spriteNode.scale.x = direction
+      }
+    }
   }
 
   /** Toggle walk animation (leg alternation). */
@@ -416,6 +473,19 @@ export class AgentCharacter extends Container {
       this.walkPhase = 0
       this.legL.y = 0
       this.legR.y = 0
+    }
+    // Sprite mode: swap to a walk sprite when starting, or revert to the
+    // state-appropriate sprite when stopping.
+    if (this.renderMode === 'sprite' && this.spriteNode && this.sprites) {
+      if (walking) {
+        this.spriteNode.texture =
+          this.facing === 1 ? this.sprites.walkRight : this.sprites.walkLeft
+        this.spriteNode.scale.x = 1
+      } else {
+        const tex = stateToTexture(this._state, this.sprites) ?? this.sprites.standing
+        this.spriteNode.texture = tex
+        this.spriteNode.scale.x = this.facing
+      }
     }
   }
 
@@ -428,7 +498,55 @@ export class AgentCharacter extends Container {
     } else {
       this.poseCurrent = this.poseTo
     }
-    this.applyPose(this.poseCurrent, deltaMs)
+    if (this.renderMode === 'sprite') {
+      this.applySpritePose(this.poseCurrent, deltaMs)
+    } else {
+      this.applyPose(this.poseCurrent, deltaMs)
+    }
+  }
+
+  /**
+   * Per-frame update for sprite-based rendering: no Graphics redraws,
+   * just breathing scale + position micro-offsets. Character Graphics
+   * (head, body, arms, legs) stay hidden — only the sprite node is
+   * visible — so we skip the rig.applyPose path entirely.
+   */
+  private applySpritePose(pose: Pose, deltaMs: number): void {
+    this.breathePhase += deltaMs * this.breatheSpeedJitter
+    if (!this.spriteNode) return
+
+    // Hide the programmatic rig + non-essential Graphics layers.
+    this.rig.visible = false
+    this.errorGlow.visible = false
+
+    // Subtle breathing scale on the sprite — alpha-cheap transform op.
+    const breatheAmp = pose.sitting * 0.015
+    const breathe = 1 + Math.sin(this.breathePhase / 450) * breatheAmp
+    this.spriteNode.scale.y = breathe
+
+    // Slight tilt for blocked state.
+    this.spriteNode.rotation = pose.bodyTilt
+
+    // Pulsing "!" for blocked — already handled as an accessory.
+    if (pose.showExclaim > 0.01) {
+      this.exclaim.alpha = pose.showExclaim
+      const pulse = 0.8 + 0.4 * Math.abs(Math.sin(this.breathePhase / 220))
+      this.exclaim.scale.set(pulse)
+    } else if (this.exclaim.alpha !== 0) {
+      this.exclaim.alpha = 0
+    }
+
+    // Recovery checkmark fade — shared with Graphics mode.
+    if (this.recoveryRemaining > 0) {
+      this.recoveryRemaining = Math.max(0, this.recoveryRemaining - deltaMs)
+      const progress = 1 - this.recoveryRemaining / RECOVERY_FLASH_DURATION_MS
+      const fade = progress < 0.4 ? progress / 0.4 : Math.max(0, 1 - (progress - 0.4) / 0.6)
+      this.recoveryCheck.alpha = fade
+      this.recoveryCheck.scale.set(1 + (1 - fade) * 0.2)
+    } else if (this.recoveryCheck.alpha !== 0) {
+      this.recoveryCheck.alpha = 0
+      this.recoveryCheck.scale.set(1)
+    }
   }
 
   // ── drawing ────────────────────────────────────────────────────────────────
@@ -627,9 +745,10 @@ export class AgentCharacter extends Container {
       this.legR.y = BODY_HEIGHT - sitOffset
     }
 
-    // Body position — add breathing wiggle.
+    // Body position — add breathing wiggle + blocked tilt.
     this.rig.x = pose.bodyOffsetX
     this.rig.y = -(BODY_HEIGHT + HEAD_RADIUS * 2 + LEG_HEIGHT) + 6 + pose.bodyOffsetY + breathe
+    this.rig.rotation = pose.bodyTilt
 
     // Head + hair offset relative to body top.
     const headY = -HEAD_RADIUS - 1 + pose.headOffsetY
@@ -667,6 +786,35 @@ export class AgentCharacter extends Container {
       this.recoveryCheck.alpha = 0
       this.recoveryCheck.scale.set(1)
     }
+  }
+}
+
+/**
+ * Map an AgentState to the best-matching sprite texture from the set.
+ *
+ * The current sprite roster has 4 poses per character (sitting,
+ * standing, walkLeft, walkRight) — we squash every state into one of
+ * those. "Sitting" covers idle/coding/blocked/error (agents at desks);
+ * "standing" covers planning/testing/communicating (agents on their
+ * feet). Direction-based walking is handled by `setFacing()` which
+ * flips between walkLeft / walkRight.
+ */
+const stateToTexture = (
+  state: AgentState,
+  sprites: CharacterSpriteSet,
+): import('pixi.js').Texture | null => {
+  switch (state) {
+    case 'idle':
+    case 'coding':
+    case 'blocked':
+    case 'error':
+      return sprites.sitting
+    case 'planning':
+    case 'testing':
+    case 'communicating':
+      return sprites.standing
+    default:
+      return null
   }
 }
 

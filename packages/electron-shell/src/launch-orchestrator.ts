@@ -28,6 +28,7 @@ import {
   type StudioEvent,
   type SwarmInfo,
   createLogger,
+  estimateCostUsd,
   distributeAgentRoles,
 } from '@agent-studio/shared'
 
@@ -313,10 +314,12 @@ export class LaunchOrchestrator {
             level: 'info',
             source: 'ruflo-stdout',
           })
+          // Try to extract token/cost metrics from the line.
+          this.tryEmitMetrics(trimmed, agentId, _swarmId)
         }
       })
 
-      // Stream stderr.
+      // Stream stderr — Claude Code logs token usage here.
       let stderrBuf = ''
       child.stderr?.on('data', (data: Buffer) => {
         stderrBuf += data.toString()
@@ -324,6 +327,8 @@ export class LaunchOrchestrator {
         stderrBuf = lines.pop() ?? ''
         for (const line of lines) {
           if (!line.trim()) continue
+          // Check for metrics before emitting as agent:log.
+          this.tryEmitMetrics(line.trim(), agentId, _swarmId)
           this.emit({
             type: 'agent:log',
             timestamp: Date.now(),
@@ -396,6 +401,89 @@ export class LaunchOrchestrator {
       this.emit(stateChange(agentId, 'planning', 'error'))
       onComplete()
     }
+  }
+
+  // ── metrics parsing ───────────────────────────────────────────────────────
+
+  /**
+   * Scan a line of stdout/stderr for token usage or cost patterns and
+   * emit a `metrics:update` event if found.
+   *
+   * Claude Code output sometimes includes lines like:
+   *   "Total tokens: 8234 (input: 5012, output: 3222)"
+   *   "Cost: $0.08"
+   *   "Model: claude-sonnet-4-6-20250514"
+   *   "42% of context used"
+   *   "input_tokens: 1234"
+   *
+   * We use simple regex patterns — if they don't match, we skip silently.
+   */
+  private tryEmitMetrics(line: string, agentId: string, swarmId: string): void {
+    const lower = line.toLowerCase()
+    let inputTokens = 0
+    let outputTokens = 0
+    let model: string | null = null
+    let matched = false
+
+    // Pattern: "input: 5012" or "input_tokens: 5012"
+    const inputMatch = lower.match(/input[_\s]*tokens?\s*[:=]\s*([\d,]+)/)
+    if (inputMatch?.[1]) {
+      inputTokens = parseInt(inputMatch[1].replace(/,/g, ''), 10) || 0
+      matched = true
+    }
+
+    // Pattern: "output: 3222" or "output_tokens: 3222"
+    const outputMatch = lower.match(/output[_\s]*tokens?\s*[:=]\s*([\d,]+)/)
+    if (outputMatch?.[1]) {
+      outputTokens = parseInt(outputMatch[1].replace(/,/g, ''), 10) || 0
+      matched = true
+    }
+
+    // Pattern: "total tokens: 8234" (if no separate in/out, split 60/40 as heuristic)
+    if (!matched) {
+      const totalMatch = lower.match(/total\s*tokens?\s*[:=]\s*([\d,]+)/)
+      if (totalMatch?.[1]) {
+        const total = parseInt(totalMatch[1].replace(/,/g, ''), 10) || 0
+        inputTokens = Math.round(total * 0.6)
+        outputTokens = total - inputTokens
+        matched = true
+      }
+    }
+
+    // Pattern: model name detection
+    const modelMatch = line.match(/(?:model|using)\s*[:=]?\s*(claude[a-z0-9-]*|opus[a-z0-9.-]*|sonnet[a-z0-9.-]*|haiku[a-z0-9.-]*)/i)
+    if (modelMatch?.[1]) {
+      const raw = modelMatch[1].toLowerCase()
+      if (raw.includes('opus')) model = 'opus-4.6'
+      else if (raw.includes('sonnet')) model = 'sonnet-4.6'
+      else if (raw.includes('haiku')) model = 'haiku-4.5'
+    }
+
+    // Pattern: "$0.08" or "cost: $1.24"
+    const costMatch = lower.match(/\$\s*([\d.]+)/)
+    let costUsd = 0
+    if (costMatch?.[1]) {
+      costUsd = parseFloat(costMatch[1]) || 0
+      matched = true
+    }
+
+    if (!matched && !model) return
+
+    // If we got tokens but no explicit cost, estimate it.
+    if (costUsd === 0 && (inputTokens > 0 || outputTokens > 0)) {
+      costUsd = estimateCostUsd(inputTokens, outputTokens, model)
+    }
+
+    this.emit({
+      type: 'metrics:update',
+      timestamp: Date.now(),
+      agentId,
+      swarmId,
+      model,
+      inputTokens,
+      outputTokens,
+      costUsd,
+    })
   }
 
   // ── file watcher ─────────────────────────────────────────────────────────

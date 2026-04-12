@@ -174,6 +174,26 @@ export const FileChangedEventSchema = z.object({
   swarmId: z.string().min(1),
 });
 
+export const TokenUsageSchema = z.object({
+  inputTokens: z.number().nonnegative(),
+  outputTokens: z.number().nonnegative(),
+  cacheReadTokens: z.number().nonnegative(),
+  cacheWriteTokens: z.number().nonnegative(),
+  totalTokens: z.number().nonnegative(),
+  estimatedCostUsd: z.number().nonnegative(),
+});
+
+export const MetricsUpdateEventSchema = z.object({
+  ...baseEvent,
+  type: z.literal('metrics:update'),
+  agentId: z.string().nullable(),
+  swarmId: z.string().min(1),
+  model: z.string().nullable(),
+  inputTokens: z.number().nonnegative(),
+  outputTokens: z.number().nonnegative(),
+  costUsd: z.number().nonnegative(),
+});
+
 export const StudioEventSchema = z.discriminatedUnion('type', [
   AgentSpawnedEventSchema,
   AgentStateChangedEventSchema,
@@ -186,6 +206,7 @@ export const StudioEventSchema = z.discriminatedUnion('type', [
   MessageSentEventSchema,
   AgentLogEventSchema,
   FileChangedEventSchema,
+  MetricsUpdateEventSchema,
 ]);
 
 // ─────────────────────────────────────────────────────────────────────────────

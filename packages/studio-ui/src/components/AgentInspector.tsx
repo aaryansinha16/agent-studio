@@ -79,6 +79,8 @@ const AgentInspector = () => {
           )}
         </Section>
 
+        <AgentMetricsSection agentId={selected.id} />
+
         <Section label="Terminal output">
           {lines.length === 0 ? (
             <p className="font-mono text-xs text-slate-600">— no output yet —</p>
@@ -238,6 +240,44 @@ const SendInstruction = ({ agent }: { agent: AgentInfo }) => {
         </button>
       </div>
     </div>
+  )
+}
+
+const AgentMetricsSection = ({ agentId }: { agentId: string }) => {
+  const tokens = useStudioStore((s) => s.agentTokens.get(agentId))
+  if (!tokens || (tokens.inputTokens === 0 && tokens.outputTokens === 0)) return null
+
+  const cost = useStudioStore((s) => {
+    const t = s.agentTokens.get(agentId)
+    if (!t) return 0
+    // Import would create a circular dep issue at module top level in some
+    // bundler configs, so inline the estimate math here.
+    const pricing: Record<string, { input: number; output: number }> = {
+      'opus-4.6': { input: 15, output: 75 },
+      'sonnet-4.6': { input: 3, output: 15 },
+      'haiku-4.5': { input: 0.8, output: 4 },
+      default: { input: 3, output: 15 },
+    }
+    const tier = (t.model && pricing[t.model]) || pricing['default']
+    if (!tier) return 0
+    return (t.inputTokens / 1_000_000) * tier.input + (t.outputTokens / 1_000_000) * tier.output
+  })
+
+  const fmtK = (n: number): string => (n >= 1000 ? `${(n / 1000).toFixed(1)}K` : String(n))
+
+  return (
+    <Section label="Metrics">
+      <div className="grid grid-cols-2 gap-x-4 gap-y-1 font-mono text-[11px]">
+        <span className="text-slate-500">Model</span>
+        <span className="text-slate-200">{tokens.model ?? 'unknown'}</span>
+        <span className="text-slate-500">Tokens</span>
+        <span className="text-slate-200">
+          {fmtK(tokens.inputTokens)} in / {fmtK(tokens.outputTokens)} out
+        </span>
+        <span className="text-slate-500">Est. Cost</span>
+        <span className="text-accent">~${cost.toFixed(2)}</span>
+      </div>
+    </Section>
   )
 }
 

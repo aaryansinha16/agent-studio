@@ -1,0 +1,61 @@
+{
+  "background": {
+    "file": "background/office-bg.png"
+  },
+  "characters": {
+    "architect": {
+      "sitting": "characters/architect-sitting.png",
+      "standing": "characters/architect-standing.png"
+    },
+    "coder": {
+      "standing": "characters/coder-standing.png",
+      "walkRight": "characters/coder-walk-right.png",
+      "walkLeft": "characters/coder-walk-left.png"
+    },
+    "tester": {
+      "standing": "characters/tester-standing.png",
+      "walkRight": "characters/tester-walk-right.png",
+      "walkLeft": "characters/tester-walk-left.png"
+    },
+    "researcher": {
+      "sitting": "characters/researcher-sitting.png",
+      "standing": "characters/researcher-standing.png",
+      "walkRight": "characters/researcher-walk.png"
+    },
+    "coordinator": {
+      "sitting": "characters/coordinator-sitting.png",
+      "standing": "characters/coordinator-standing.png",
+      "walkRight": "characters/coordinator-walk-right.png",
+      "walkLeft": "characters/coordinator-walk-left.png"
+    },
+    "coder2": {
+      "sitting": "characters/coder2-sitting.png",
+      "standing": "characters/coder2-standing.png",
+      "walkRight": "characters/coder2-walk-right.png"
+    }
+  },
+  "roleMapping": {
+    "architect": "architect",
+    "coder": "coder",
+    "tester": "tester",
+    "researcher": "researcher",
+    "coordinator": "coordinator",
+    "default": "coder2"
+  },
+  "furniture": {
+    "desk": "furniture/desk.png",
+    "chair": "furniture/chair.png",
+    "whiteboard": "furniture/whiteboard.png",
+    "bookshelf": "furniture/bookshelf.png",
+    "filing-cabinet": "furniture/filing-cabinet.png",
+    "water-cooler": "furniture/water-cooler.png",
+    "plant": "furniture/plant.png",
+    "clock": "furniture/clock.png",
+    "poster-ship-it": "furniture/poster-ship-it.png",
+    "window": "furniture/window.png",
+    "coffee-mug": "furniture/coffee-mug.png",
+    "cup": "furniture/cup.png",
+    "trash-can": "furniture/trash-can.png",
+    "ceiling-light": "furniture/ceiling-light.png"
+  }
+}

@@ -58,3 +58,26 @@ export const SOURCE_PLUGIN = 'ruflo-plugin';
 
 /** Default mock generator source identifier. */
 export const SOURCE_MOCK = 'mock-generator';
+
+/**
+ * Approximate pricing per 1 million tokens for cost estimation display.
+ * These are ballpark figures — actual billing may differ.
+ */
+export const MODEL_PRICING: Readonly<Record<string, { input: number; output: number }>> = {
+  'opus-4.6': { input: 15.0, output: 75.0 },
+  'sonnet-4.6': { input: 3.0, output: 15.0 },
+  'haiku-4.5': { input: 0.8, output: 4.0 },
+  // Fallback for unrecognized models.
+  default: { input: 3.0, output: 15.0 },
+};
+
+/** Calculate estimated cost in USD from token counts and model tier. */
+export const estimateCostUsd = (
+  inputTokens: number,
+  outputTokens: number,
+  model: string | null,
+): number => {
+  const tier = (model && MODEL_PRICING[model]) || MODEL_PRICING['default'];
+  if (!tier) return 0;
+  return (inputTokens / 1_000_000) * tier.input + (outputTokens / 1_000_000) * tier.output;
+};

@@ -356,7 +356,8 @@ export class StateStore {
         return true;
       }
       case 'agent:log':
-      case 'file:changed': {
+      case 'file:changed':
+      case 'metrics:update': {
         // These events are forwarded to UI clients for display but do not
         // mutate the in-memory world state. The bridge just persists them
         // in the events table (via the pending-events queue) for replay.

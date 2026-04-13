@@ -95,9 +95,6 @@ const OfficePanel = ({ variant = 'panel' }: OfficePanelProps) => {
     return (
       <div className="relative h-full min-h-0 w-full overflow-hidden bg-ink-950">
         <div ref={hostRef} className="absolute inset-0" />
-        <div className="pointer-events-none absolute left-4 top-4 rounded-md border border-ink-700/70 bg-ink-900/70 px-2.5 py-1 font-mono text-[10px] uppercase tracking-[0.16em] text-slate-500 backdrop-blur">
-          drag to pan · scroll to zoom
-        </div>
       </div>
     )
   }
@@ -107,9 +104,7 @@ const OfficePanel = ({ variant = 'panel' }: OfficePanelProps) => {
       <header className="panel-header">
         <h2 className="panel-title">Office</h2>
         <div className="flex items-center gap-2 font-mono text-[10px] uppercase tracking-[0.16em] text-slate-500">
-          <span>drag to pan</span>
-          <span className="text-slate-700">·</span>
-          <span>scroll to zoom</span>
+          <span>fixed view</span>
         </div>
       </header>
       <div ref={hostRef} className="relative flex-1 overflow-hidden" />

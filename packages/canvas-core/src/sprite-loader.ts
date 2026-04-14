@@ -77,15 +77,35 @@ export interface OfficeAssets {
 // ─────────────────────────────────────────────────────────────────────────────
 
 /**
+ * Module-level cache keyed by basePath. Pixi's Assets.load already caches
+ * textures, but fetch()ing the manifest + awaiting the per-variant loads
+ * adds ~100 ms on every re-mount — unacceptable when the user tabs back
+ * to the Office page. Caching the resolved bundle here makes subsequent
+ * mounts synchronous (microtask-fast).
+ */
+const assetsCache = new Map<string, Promise<OfficeAssets | null>>()
+
+/**
  * Load every sprite described by the manifest at `<basePath>/sprite-manifest.json`.
  *
  * Returns `null` if the manifest can't be fetched or any required
  * character variant texture is missing. Callers should treat `null` as
  * "sprites unavailable, fall back to programmatic rendering".
  */
-export const loadOfficeAssets = async (basePath: string): Promise<OfficeAssets | null> => {
+export const loadOfficeAssets = (basePath: string): Promise<OfficeAssets | null> => {
   const trimmedBase = basePath.endsWith('/') ? basePath.slice(0, -1) : basePath
+  const cached = assetsCache.get(trimmedBase)
+  if (cached) return cached
+  const promise = doLoadOfficeAssets(trimmedBase)
+  assetsCache.set(trimmedBase, promise)
+  // If loading fails, don't cache the failure — let the next attempt retry.
+  void promise.then((result) => {
+    if (result === null) assetsCache.delete(trimmedBase)
+  })
+  return promise
+}
 
+const doLoadOfficeAssets = async (trimmedBase: string): Promise<OfficeAssets | null> => {
   // 1. Fetch the manifest.
   let manifest: SpriteManifest
   try {

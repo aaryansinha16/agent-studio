@@ -846,7 +846,37 @@ const updateChatHistoryStatusForTask = (
 
 // ── Selector helpers ─────────────────────────────────────────────────────────
 
-export const selectAgents = (s: StudioState): AgentInfo[] => Array.from(s.agents.values())
-export const selectTasks = (s: StudioState): TaskInfo[] => Array.from(s.tasks.values())
+/**
+ * Cached array derivations keyed by the source Map reference. Previously
+ * `selectAgents` called `Array.from(map.values())` directly inside a
+ * Zustand selector, which returned a NEW array reference on every store
+ * update. Because Zustand subscribers re-run the selector on every
+ * `set()`, any component using `selectAgents` would re-render for every
+ * event — even unrelated ones like log pushes — and a sluggish tab
+ * switch was the visible symptom.
+ *
+ * Key by Map reference: the store only allocates a new Map when the
+ * agent/task collection actually changes (via `cloneAgentMap` /
+ * `cloneTaskMap`), so the cache invalidates exactly when it should.
+ */
+const agentsArrayCache = new WeakMap<Map<string, AgentInfo>, AgentInfo[]>()
+const tasksArrayCache = new WeakMap<Map<string, TaskInfo>, TaskInfo[]>()
+
+export const selectAgents = (s: StudioState): AgentInfo[] => {
+  const cached = agentsArrayCache.get(s.agents)
+  if (cached) return cached
+  const arr = Array.from(s.agents.values())
+  agentsArrayCache.set(s.agents, arr)
+  return arr
+}
+
+export const selectTasks = (s: StudioState): TaskInfo[] => {
+  const cached = tasksArrayCache.get(s.tasks)
+  if (cached) return cached
+  const arr = Array.from(s.tasks.values())
+  tasksArrayCache.set(s.tasks, arr)
+  return arr
+}
+
 export const selectSelectedAgent = (s: StudioState): AgentInfo | null =>
   s.selectedAgentId ? s.agents.get(s.selectedAgentId) ?? null : null

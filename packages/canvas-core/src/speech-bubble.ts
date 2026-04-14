@@ -53,6 +53,11 @@ export class SpeechBubble extends Container {
       align: 'left',
     })
     text.anchor.set(0.5, 0.5)
+    // The office scene runs the Pixi Application at resolution 1 for
+    // perf, which leaves Text rasterized at 1x and visibly blurry on
+    // Retina. Bump the Text's own resolution to DPR so each glyph
+    // texture is rendered at the display's native pixel density.
+    text.resolution = typeof window !== 'undefined' ? Math.max(2, window.devicePixelRatio || 2) : 2
 
     const bgWidth = Math.min(240, text.width + PADDING * 2 + 8)
     const bgHeight = text.height + PADDING * 2

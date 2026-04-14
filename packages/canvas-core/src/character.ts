@@ -349,6 +349,10 @@ export class AgentCharacter extends Container {
     })
     this.nameLabel.anchor.set(0.5, 0)
     this.nameLabel.y = 14
+    // Render glyphs at DPR so name labels stay sharp on Retina even
+    // though the Application runs at resolution 1 for perf.
+    this.nameLabel.resolution =
+      typeof window !== 'undefined' ? Math.max(2, window.devicePixelRatio || 2) : 2
 
     // Dark pill background behind the name label for readability on any
     // background (office floor, desktop wallpaper, etc.).
@@ -374,6 +378,8 @@ export class AgentCharacter extends Container {
     this.exclaim.anchor.set(0.5, 1)
     this.exclaim.y = -(CHAR_HEIGHT - 4)
     this.exclaim.alpha = 0
+    this.exclaim.resolution =
+      typeof window !== 'undefined' ? Math.max(2, window.devicePixelRatio || 2) : 2
     this.addChild(this.exclaim)
 
     this.recoveryCheck = new Text('✓', {
@@ -389,6 +395,8 @@ export class AgentCharacter extends Container {
     this.recoveryCheck.anchor.set(0.5, 1)
     this.recoveryCheck.y = -(CHAR_HEIGHT - 4)
     this.recoveryCheck.alpha = 0
+    this.recoveryCheck.resolution =
+      typeof window !== 'undefined' ? Math.max(2, window.devicePixelRatio || 2) : 2
     this.addChild(this.recoveryCheck)
 
     this.drawStatic()

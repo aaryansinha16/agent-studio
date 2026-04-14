@@ -4,6 +4,23 @@ import { IsometricOffice } from '../canvas/IsometricOffice'
 import { selectAgents, useStudioStore } from '../store/studioStore'
 
 /**
+ * Module-level singleton. Keeps the Pixi scene alive across Office ↔
+ * Dashboard page switches so the React component can just reparent
+ * the canvas instead of tearing down the whole Application and
+ * reloading sprite assets on every tab toggle. The previous lifecycle
+ * (create/destroy on every mount) was the dominant cost of a 4-6s
+ * tab switch.
+ */
+let sharedScene: IsometricOffice | null = null
+
+const ensureScene = (onSelectAgent: (id: string) => void, onDeselect: () => void): IsometricOffice => {
+  if (!sharedScene) {
+    sharedScene = new IsometricOffice({ onSelectAgent, onDeselect })
+  }
+  return sharedScene
+}
+
+/**
  * React wrapper around the Pixi.js IsometricOffice scene.
  *
  * Responsibilities:
@@ -34,15 +51,17 @@ const OfficePanel = ({ variant = 'panel' }: OfficePanelProps) => {
   const selectAgent = useStudioStore((s) => s.selectAgent)
   const selectedAgentId = useStudioStore((s) => s.selectedAgentId)
 
-  // Mount / unmount the scene.
+  // Mount / unmount the scene. The scene itself is a module-level
+  // singleton; mount = attach canvas to the new host, unmount = suspend
+  // (keeps the Pixi app alive for the next mount).
   useEffect(() => {
     const host = hostRef.current
     if (!host) return
 
-    const scene = new IsometricOffice({
-      onSelectAgent: (id) => selectAgent(id),
-      onDeselect: () => selectAgent(null),
-    })
+    const scene = ensureScene(
+      (id) => selectAgent(id),
+      () => selectAgent(null),
+    )
     sceneRef.current = scene
     void scene.attach(host).catch((err: unknown) => {
       // eslint-disable-next-line no-console
@@ -55,7 +74,7 @@ const OfficePanel = ({ variant = 'panel' }: OfficePanelProps) => {
 
     return () => {
       sceneRef.current = null
-      scene.detach()
+      scene.suspend()
     }
     // Intentionally run only once — the store subscriptions below keep
     // the scene in sync without re-mounting it.

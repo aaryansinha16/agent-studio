@@ -95,6 +95,7 @@ export class IsometricOffice {
   private app: Application | null = null
   private host: HTMLDivElement | null = null
   private spriteAssets: OfficeAssets | null = null
+  private resizeObserver: ResizeObserver | null = null
 
   private readonly world = new Container()
   private readonly monitorLayer = new Container()
@@ -133,8 +134,23 @@ export class IsometricOffice {
 
   // ── lifecycle ──────────────────────────────────────────────────────────────
 
+  /**
+   * Attach the scene's canvas to the given host div.
+   *
+   * First call: boots the Pixi Application, loads sprite assets, and
+   * installs the tick/resize plumbing.
+   * Subsequent calls: the scene is already built — just reparent the
+   * existing canvas to the new host and resize to fit. This is what
+   * makes page-to-page tab switches cheap (no Pixi teardown, no asset
+   * reload, no background re-bake).
+   */
   async attach(host: HTMLDivElement): Promise<void> {
-    if (this.app) return
+    // Already built? Just move the canvas element to the new host.
+    if (this.app) {
+      this.reparentTo(host)
+      return
+    }
+
     this.host = host
     const rect = host.getBoundingClientRect()
 
@@ -187,23 +203,53 @@ export class IsometricOffice {
       if (e.target === app.stage) this.opts.onDeselect?.()
     })
 
-    // Resize handler.
-    const ro = new ResizeObserver(() => {
+    // Resize handler. Kept on the instance so it can re-observe the
+    // new host after suspend/reparent without leaking observers.
+    this.resizeObserver = new ResizeObserver(() => {
       if (!this.app || !this.host) return
       const r = this.host.getBoundingClientRect()
       this.app.renderer.resize(Math.max(320, r.width), Math.max(240, r.height))
       this.fitWorld(r.width, r.height)
     })
-    ro.observe(host)
-    this.cleanup.push(() => ro.disconnect())
+    this.resizeObserver.observe(host)
 
     // Tick loop — as lean as possible.
     app.ticker.add((delta) => this.tick(delta * (1000 / 60)))
   }
 
-  detach(): void {
+  /**
+   * Detach the canvas from the current host without destroying the
+   * Pixi Application. The scene's agents, textures, and ticker stay
+   * alive so a subsequent `attach()` is microtask-fast.
+   *
+   * Used when the React component unmounts on a page switch.
+   */
+  suspend(): void {
+    if (this.resizeObserver) {
+      this.resizeObserver.disconnect()
+      this.resizeObserver = null
+    }
+    if (this.app && this.host) {
+      const canvas = this.app.view as HTMLCanvasElement
+      if (canvas.parentNode === this.host) this.host.removeChild(canvas)
+    }
+    // Pause the ticker while detached — no point rendering into a
+    // canvas that isn't in the DOM.
+    if (this.app) this.app.ticker.stop()
+    this.host = null
+  }
+
+  /**
+   * Fully destroy the scene — Pixi Application, agents, bubbles, etc.
+   * Only used when the whole Studio window is closing.
+   */
+  destroy(): void {
     for (const fn of this.cleanup) fn()
     this.cleanup = []
+    if (this.resizeObserver) {
+      this.resizeObserver.disconnect()
+      this.resizeObserver = null
+    }
     for (const m of this.agents.values()) m.character.destroy({ children: true })
     this.agents.clear()
     for (const b of this.bubbles) b.bubble.destroy({ children: true })
@@ -216,6 +262,39 @@ export class IsometricOffice {
       while (this.host.firstChild) this.host.removeChild(this.host.firstChild)
       this.host = null
     }
+  }
+
+  /** Legacy alias — React cleanup used to destroy the scene; now just suspend. */
+  detach(): void {
+    this.suspend()
+  }
+
+  private reparentTo(host: HTMLDivElement): void {
+    if (!this.app) return
+    const canvas = this.app.view as HTMLCanvasElement
+    if (canvas.parentNode && canvas.parentNode !== host) {
+      canvas.parentNode.removeChild(canvas)
+    }
+    if (canvas.parentNode !== host) host.appendChild(canvas)
+    this.host = host
+
+    // Resume the ticker and re-observe the new host.
+    if (!this.app.ticker.started) this.app.ticker.start()
+    if (!this.resizeObserver) {
+      this.resizeObserver = new ResizeObserver(() => {
+        if (!this.app || !this.host) return
+        const r = this.host.getBoundingClientRect()
+        this.app.renderer.resize(Math.max(320, r.width), Math.max(240, r.height))
+        this.fitWorld(r.width, r.height)
+      })
+    }
+    this.resizeObserver.observe(host)
+
+    // Resize once synchronously so the canvas fills the new host's
+    // current size before the observer's first callback.
+    const r = host.getBoundingClientRect()
+    this.app.renderer.resize(Math.max(320, r.width), Math.max(240, r.height))
+    this.fitWorld(r.width, r.height)
   }
 
   // ── public API ─────────────────────────────────────────────────────────────

@@ -34,7 +34,7 @@ const App = () => {
 
       <footer className="border-t border-ink-800 bg-ink-900/40 px-6 py-2 text-center font-mono text-[10px] uppercase tracking-[0.2em] text-slate-600">
         {currentPage === 'office'
-          ? 'phase 2 · office · floating launcher · drag to pan · scroll to zoom'
+          ? 'phase 2 · office · floating launcher · fixed view'
           : 'phase 2 · dashboard · launcher + history + inspector'}
       </footer>
     </div>

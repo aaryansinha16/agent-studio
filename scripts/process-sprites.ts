@@ -5,10 +5,11 @@
  *   1. Fix furniture PNGs — detect the solid background color from the
  *      corner pixels, punch matching pixels out to transparent, auto-trim,
  *      resize with nearest-neighbor, save in place.
- *   2. Extract characters from assets-raw/characters.png using verified
- *      bounding boxes. Remove the grey/white checker background, trim,
- *      resize to 120px height, save each to
- *      packages/studio-ui/public/assets/sprites/characters/.
+ *   2. Copy user-provided character PNGs from assets-raw/characters/ into
+ *      packages/studio-ui/public/assets/sprites/characters/, resized to
+ *      120px tall with nearest-neighbor. The user drops pre-cut,
+ *      transparent PNGs named to match the manifest (e.g.
+ *      `architect-sitting.png`) — no extraction or keying is performed.
  *   3. Emit sprite-manifest.json with paths + role mapping, and mirror
  *      the characters + manifest into desktop-overlay's public folder.
  *
@@ -26,7 +27,7 @@ import sharp from 'sharp'
 const REPO_ROOT = path.resolve(process.cwd())
 const STUDIO_PUBLIC = path.join(REPO_ROOT, 'packages/studio-ui/public/assets/sprites')
 const OVERLAY_PUBLIC = path.join(REPO_ROOT, 'packages/desktop-overlay/public/assets/sprites')
-const RAW_CHARACTERS = path.join(REPO_ROOT, 'assets-raw/characters.png')
+const RAW_CHARACTERS_DIR = path.join(REPO_ROOT, 'assets-raw/characters')
 const FURNITURE_DIR = path.join(STUDIO_PUBLIC, 'furniture')
 const CHARACTERS_OUT = path.join(STUDIO_PUBLIC, 'characters')
 
@@ -51,45 +52,39 @@ const FURNITURE_WIDTHS: Record<string, number> = {
   'ceiling-light': 180,
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
-// Character bounding boxes (verified visually by the user).
-// ─────────────────────────────────────────────────────────────────────────────
-
-interface CharSpec {
-  name: string
-  x: number
-  y: number
-  w: number
-  h: number
-}
-
-const CHARACTER_SPECS: CharSpec[] = [
-  // Row 1
-  { name: 'architect-sitting', x: 0, y: 0, w: 210, h: 185 },
-  { name: 'coder-standing', x: 210, y: 0, w: 120, h: 185 },
-  { name: 'coder-walk-right', x: 330, y: 0, w: 130, h: 185 },
-  { name: 'tester-walk-right', x: 460, y: 0, w: 120, h: 185 },
-  { name: 'researcher-sitting', x: 680, y: 0, w: 200, h: 185 },
-  { name: 'coordinator-walk-right', x: 880, y: 0, w: 130, h: 185 },
-  { name: 'coder2-sitting', x: 1100, y: 0, w: 276, h: 185 },
-  // Row 2
-  { name: 'architect-standing', x: 0, y: 185, w: 140, h: 195 },
-  { name: 'coder-walk-right2', x: 210, y: 185, w: 130, h: 195 },
-  { name: 'tester-standing', x: 460, y: 185, w: 120, h: 195 },
-  { name: 'coordinator-standing', x: 880, y: 185, w: 120, h: 195 },
-  { name: 'coder2-standing', x: 1100, y: 185, w: 120, h: 195 },
-  { name: 'coder2-walk-right', x: 1220, y: 185, w: 156, h: 195 },
-  // Row 3
-  { name: 'architect-sitting2', x: 0, y: 375, w: 200, h: 185 },
-  { name: 'coder-walk-left', x: 330, y: 375, w: 130, h: 185 },
-  { name: 'tester-walk-left', x: 460, y: 375, w: 120, h: 185 },
-  { name: 'researcher-sitting2', x: 680, y: 375, w: 200, h: 185 },
-  { name: 'researcher-standing', x: 880, y: 375, w: 110, h: 185 },
-  { name: 'researcher-walk', x: 990, y: 375, w: 110, h: 185 },
-  // Row 4
-  { name: 'coordinator-sitting', x: 0, y: 565, w: 210, h: 203 },
-  { name: 'coordinator-walk-left', x: 330, y: 565, w: 130, h: 203 },
-]
+/**
+ * Character names referenced by the manifest. These are the files the
+ * script expects to find in `assets-raw/characters/` (as `<name>.png`).
+ * Missing files are reported but don't fail the build — the manifest
+ * still references the expected output paths so the loader falls back
+ * to procedural rendering for unavailable variants.
+ */
+const CHARACTER_NAMES = [
+  // architect
+  'architect-sitting',
+  'architect-standing',
+  // coder
+  'coder-standing',
+  'coder-walk-right',
+  'coder-walk-left',
+  // tester
+  'tester-standing',
+  'tester-walk-right',
+  'tester-walk-left',
+  // researcher
+  'researcher-sitting',
+  'researcher-standing',
+  'researcher-walk',
+  // coordinator
+  'coordinator-sitting',
+  'coordinator-standing',
+  'coordinator-walk-right',
+  'coordinator-walk-left',
+  // default fallback variant
+  'coder2-sitting',
+  'coder2-standing',
+  'coder2-walk-right',
+] as const
 
 /** Target character height after processing. */
 const CHARACTER_TARGET_HEIGHT = 120
@@ -164,27 +159,6 @@ const keyOutColor = (
   }
 }
 
-/**
- * Mutate an RGBA buffer: punch out pixels that look like the grey/white
- * checker pattern used as fake transparency in the raw character sheet.
- * Any pixel where R>170, G>170, B>170 AND (max-min channel diff < 20)
- * becomes transparent.
- */
-const keyOutCheckerBackground = (buffer: Buffer): void => {
-  for (let i = 0; i < buffer.length; i += 4) {
-    const r = buffer[i] ?? 0
-    const g = buffer[i + 1] ?? 0
-    const b = buffer[i + 2] ?? 0
-    if (r > 170 && g > 170 && b > 170) {
-      const maxCh = Math.max(r, g, b)
-      const minCh = Math.min(r, g, b)
-      if (maxCh - minCh < 20) {
-        buffer[i + 3] = 0
-      }
-    }
-  }
-}
-
 // ─────────────────────────────────────────────────────────────────────────────
 // Furniture processor
 // ─────────────────────────────────────────────────────────────────────────────
@@ -241,42 +215,73 @@ const processFurniture = async (): Promise<void> => {
 // ─────────────────────────────────────────────────────────────────────────────
 
 const processCharacters = async (): Promise<void> => {
-  console.log('→ Extracting characters from raw sheet…')
+  console.log('→ Processing user-cut characters from assets-raw/characters/…')
   await ensureDir(CHARACTERS_OUT)
 
-  // Load the full raw sheet once.
-  const sheet = sharp(RAW_CHARACTERS).ensureAlpha()
-  const sheetMeta = await sheet.metadata()
-  console.log(
-    `  sheet ${sheetMeta.width}×${sheetMeta.height}, ${CHARACTER_SPECS.length} characters to extract`,
+  // Verify the source directory exists. If it doesn't, skip gracefully —
+  // the manifest is still written so the loader falls back to procedural
+  // rendering for everything.
+  try {
+    await fs.access(RAW_CHARACTERS_DIR)
+  } catch {
+    console.log(`  ⚠ ${RAW_CHARACTERS_DIR} not found — skipping character processing`)
+    console.log('    Drop pre-cut, transparent PNGs (e.g. architect-sitting.png) there to enable sprites.')
+    return
+  }
+
+  const files = await fs.readdir(RAW_CHARACTERS_DIR)
+  const pngs = new Set(
+    files.filter((f) => f.toLowerCase().endsWith('.png')).map((f) => f.replace(/\.png$/i, '')),
   )
 
-  for (const spec of CHARACTER_SPECS) {
-    // Extract the bounding box as a raw RGBA buffer.
-    const { data, info } = await sharp(RAW_CHARACTERS)
+  let processed = 0
+  const missing: string[] = []
+
+  for (const name of CHARACTER_NAMES) {
+    if (!pngs.has(name)) {
+      missing.push(name)
+      continue
+    }
+    const src = path.join(RAW_CHARACTERS_DIR, `${name}.png`)
+    const resized = await sharp(src)
       .ensureAlpha()
-      .extract({ left: spec.x, top: spec.y, width: spec.w, height: spec.h })
-      .raw()
-      .toBuffer({ resolveWithObject: true })
-
-    // Punch out the checker background.
-    keyOutCheckerBackground(data)
-
-    // Reconstruct, trim, resize to 120 height.
-    const processed = await sharp(data, {
-      raw: { width: info.width, height: info.height, channels: 4 },
-    })
-      .trim({ background: { r: 0, g: 0, b: 0, alpha: 0 }, threshold: 1 })
       .resize({
         height: CHARACTER_TARGET_HEIGHT,
         kernel: sharp.kernel.nearest,
       })
       .png()
       .toBuffer()
+    const outPath = path.join(CHARACTERS_OUT, `${name}.png`)
+    await fs.writeFile(outPath, resized)
+    console.log(`  ✓ ${name}`)
+    processed += 1
+  }
 
-    const outPath = path.join(CHARACTERS_OUT, `${spec.name}.png`)
-    await fs.writeFile(outPath, processed)
-    console.log(`  ✓ ${spec.name}`)
+  // Also copy through any extra PNGs the user dropped in (useful for
+  // experimentation without wiring them into the manifest yet).
+  for (const base of pngs) {
+    if (CHARACTER_NAMES.includes(base as (typeof CHARACTER_NAMES)[number])) continue
+    const src = path.join(RAW_CHARACTERS_DIR, `${base}.png`)
+    const resized = await sharp(src)
+      .ensureAlpha()
+      .resize({
+        height: CHARACTER_TARGET_HEIGHT,
+        kernel: sharp.kernel.nearest,
+      })
+      .png()
+      .toBuffer()
+    const outPath = path.join(CHARACTERS_OUT, `${base}.png`)
+    await fs.writeFile(outPath, resized)
+    console.log(`  ✓ ${base} (extra)`)
+    processed += 1
+  }
+
+  console.log(`  processed ${processed} file(s)`)
+  if (missing.length > 0) {
+    console.log(
+      `  ⚠ missing ${missing.length} manifest character(s): ${missing.join(', ')}`,
+    )
+    console.log('    The loader will fall back to procedural rendering for these roles.')
   }
 }
 

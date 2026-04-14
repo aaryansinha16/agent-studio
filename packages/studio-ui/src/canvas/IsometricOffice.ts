@@ -22,14 +22,12 @@ import {
   OFFICE_COLORS,
   SpeechBubble,
   cosmeticsForIndex,
-  easeInOutQuad,
   loadOfficeAssets,
   type OfficeAssets,
 } from '@agent-studio/canvas-core'
 import type {
   AgentInfo,
   AgentMessage,
-  AgentState,
   AgentType,
   StudioEvent,
 } from '@agent-studio/shared'
@@ -57,8 +55,11 @@ interface DeskSlot {
   row: number
   x: number
   y: number
-  /** Live monitor rectangle — toggled between glow and dark. */
-  monitor: Graphics
+  /** Live monitor rectangle — toggled between glow and dark. Populated
+   *  lazily during `buildMonitors()`; null before the scene's async
+   *  attach() finishes. Geometry fields (x/y/row/index) are known up
+   *  front so `nextDesk()` works the instant the scene is constructed. */
+  monitor: Graphics | null
   lastMode: 'coding' | 'other'
 }
 
@@ -110,6 +111,24 @@ export class IsometricOffice {
 
   constructor(opts: IsometricOfficeOptions = {}) {
     this.opts = opts
+    // Populate the desk layout synchronously so setAgents() can assign
+    // unique desks immediately — attach() is async and hydrating agents
+    // run before it resolves. Without this, every agent fell back to
+    // the shared default home position and bunched together.
+    for (let row = 0; row < DESK_ROW_Y.length; row++) {
+      const rowY = DESK_ROW_Y[row]
+      if (rowY === undefined) continue
+      for (let col = 0; col < DESK_COLS; col++) {
+        this.desks.push({
+          index: row * DESK_COLS + col,
+          row,
+          x: DESK_ORIGIN_X + col * DESK_SPACING,
+          y: rowY,
+          monitor: null,
+          lastMode: 'other',
+        })
+      }
+    }
   }
 
   // ── lifecycle ──────────────────────────────────────────────────────────────
@@ -326,21 +345,15 @@ export class IsometricOffice {
   // ── live monitors (binary toggle, no per-frame pulse) ────────────────────
 
   private buildMonitors(): void {
-    for (let row = 0; row < DESK_ROW_Y.length; row++) {
-      const rowY = DESK_ROW_Y[row]
-      if (rowY === undefined) continue
-      for (let col = 0; col < DESK_COLS; col++) {
-        const idx = row * DESK_COLS + col
-        const x = DESK_ORIGIN_X + col * DESK_SPACING
-        const monitor = new Graphics()
-        monitor.beginFill(OFFICE_COLORS.monitorScreen, 1)
-        monitor.drawRoundedRect(-22, -30, 44, 18, 1.5)
-        monitor.endFill()
-        monitor.x = x
-        monitor.y = rowY
-        this.monitorLayer.addChild(monitor)
-        this.desks.push({ index: idx, row, x, y: rowY, monitor, lastMode: 'other' })
-      }
+    for (const desk of this.desks) {
+      const monitor = new Graphics()
+      monitor.beginFill(OFFICE_COLORS.monitorScreen, 1)
+      monitor.drawRoundedRect(-22, -30, 44, 18, 1.5)
+      monitor.endFill()
+      monitor.x = desk.x
+      monitor.y = desk.y
+      this.monitorLayer.addChild(monitor)
+      desk.monitor = monitor
     }
   }
 
@@ -504,6 +517,7 @@ export class IsometricOffice {
 
     // Monitors — binary toggle, only redraw when mode changes.
     for (const desk of this.desks) {
+      if (!desk.monitor) continue
       const occ = this.occupant(desk.index)
       const mode: 'coding' | 'other' = occ?.character.state === 'coding' ? 'coding' : 'other'
       if (mode !== desk.lastMode) {

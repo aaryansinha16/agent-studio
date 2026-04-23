@@ -290,5 +290,11 @@ const isEntrypoint = (() => {
 })();
 
 if (isEntrypoint) {
-  startBridge();
+  const envHost = process.env.BRIDGE_HOST;
+  const envPortRaw = process.env.BRIDGE_PORT;
+  const envPort = envPortRaw ? Number(envPortRaw) : undefined;
+  startBridge({
+    ...(envHost ? { host: envHost } : {}),
+    ...(envPort && Number.isFinite(envPort) ? { port: envPort } : {}),
+  });
 }

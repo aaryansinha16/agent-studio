@@ -21,6 +21,10 @@ export RUFLO_REAL_MODE="${RUFLO_REAL_MODE:-0}"
 # matter what the developer's shell is configured to.
 unset ELECTRON_RUN_AS_NODE
 
+# This dev script already supervises the bridge under `concurrently`, so
+# tell Electron main to skip its own supervision path and just connect.
+export RUFLO_EXTERNAL_BRIDGE=1
+
 if [ "${RUFLO_REAL_MODE:-0}" = "1" ]; then
   echo "[dev-electron] RUFLO_REAL_MODE=1 — skipping mock generator, waiting for real swarms"
   exec npx --yes concurrently \

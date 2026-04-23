@@ -16,6 +16,7 @@ import {
   type BridgeConnectionStatus,
   type LaunchParams,
   type LaunchResult,
+  type ProducerOrigin,
   type ProjectSession,
   type RendererRole,
   type StudioBridgeApi,
@@ -60,6 +61,16 @@ const api: StudioBridgeApi = {
     ipcRenderer.on(IPC_CHANNELS.STUDIO_CONNECTION, wrapped)
     return () => {
       ipcRenderer.removeListener(IPC_CHANNELS.STUDIO_CONNECTION, wrapped)
+    }
+  },
+
+  onProducer(handler) {
+    const wrapped = (_event: Electron.IpcRendererEvent, origin: ProducerOrigin | null) => {
+      handler(origin)
+    }
+    ipcRenderer.on(IPC_CHANNELS.STUDIO_PRODUCER, wrapped)
+    return () => {
+      ipcRenderer.removeListener(IPC_CHANNELS.STUDIO_PRODUCER, wrapped)
     }
   },
 

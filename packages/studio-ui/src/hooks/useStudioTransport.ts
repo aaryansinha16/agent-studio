@@ -94,6 +94,9 @@ const useElectronTransport = (enabled: boolean): void => {
     const offConnection = bridge.onConnection((status) => {
       store().setConnectionStatus(status)
     })
+    const offProducer = bridge.onProducer((origin) => {
+      store().setActiveProducer(origin)
+    })
     const offFocus = bridge.onAgentFocused((agentId) => {
       store().selectAgent(agentId)
     })
@@ -102,6 +105,7 @@ const useElectronTransport = (enabled: boolean): void => {
       cancelled = true
       offEvent()
       offConnection()
+      offProducer()
       offFocus()
     }
   }, [enabled])

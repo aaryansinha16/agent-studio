@@ -272,7 +272,7 @@ export const useStudioStore = create<StudioState>((set, get) => ({
 
   // studio-local UI state
   currentPage: 'office',
-  displayMode: 'both',
+  displayMode: 'studio',
   selectedAgentId: null,
   workspace: null,
   chatHistory: [],

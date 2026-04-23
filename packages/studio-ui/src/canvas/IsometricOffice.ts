@@ -387,16 +387,19 @@ export class IsometricOffice {
       s.y = y
       parent.addChild(s)
     }
-    place('window', 300, 240, 0.5)
-    place('poster-ship-it', 680, 230, 0.5)
-    place('clock', 920, 240, 0.5)
-    place('whiteboard', 500, 380, 1)
-    place('bookshelf', 100, WORLD_H - 40)
-    place('filing-cabinet', 220, WORLD_H - 40)
-    place('plant', 1640, WORLD_H - 40)
-    place('water-cooler', 1480, 560)
-    place('trash-can', 1700, WORLD_H - 40)
+    // Back-wall fixtures (wall runs y≈0–520; anchorY=0.5 hangs them).
+    place('poster-ship-it', 500, 220, 0.5)
+    place('clock', 1100, 220, 0.5)
     place('ceiling-light', WORLD_W / 2, 30)
+
+    // Floor-standing fixtures — sit on the floor line (anchorY=1 by default).
+    // Left cluster, tucked beside the front desk row:
+    place('bookshelf', 90, WORLD_H - 30)
+    place('filing-cabinet', 200, WORLD_H - 30)
+    // Right cluster:
+    place('water-cooler', 1610, WORLD_H - 30)
+    place('trash-can', 1710, WORLD_H - 30)
+    place('plant', 1780, WORLD_H - 30)
 
     const deskTex = assets.furniture.get('desk')
     const chairTex = assets.furniture.get('chair')

@@ -24,6 +24,7 @@ import type {
   AgentMessage,
   AgentType,
   ChatHistoryRecord,
+  ProducerOrigin,
   ProjectSession,
   StudioEvent,
   SwarmInfo,
@@ -95,6 +96,12 @@ interface StudioState {
   swarm: SwarmInfo | null
   log: LoggedEvent[]
   connectionStatus: ConnectionStatus
+  /**
+   * Which producer the bridge is currently attributing events to
+   * ('ruflo' | 'orchestrator' | 'mock' | null). Source of truth for the
+   * header "Live Ruflo / Mock / Disconnected" pill.
+   */
+  activeProducer: ProducerOrigin | null
   lastError: string | null
   startedAt: number | null
 
@@ -125,6 +132,7 @@ interface StudioState {
 
   // ── actions ──────────────────────────────────────────────────────────────
   setConnectionStatus(status: ConnectionStatus, error?: string | null): void
+  setActiveProducer(origin: ProducerOrigin | null): void
   hydrateFromSnapshot(snapshot: WorldSnapshot): void
   applyEvent(event: StudioEvent): void
   reset(): void
@@ -267,6 +275,7 @@ export const useStudioStore = create<StudioState>((set, get) => ({
   swarm: null,
   log: [],
   connectionStatus: 'idle',
+  activeProducer: null,
   lastError: null,
   startedAt: null,
 
@@ -295,6 +304,10 @@ export const useStudioStore = create<StudioState>((set, get) => ({
     set({ connectionStatus: status, lastError: error })
   },
 
+  setActiveProducer(origin) {
+    set({ activeProducer: origin })
+  },
+
   hydrateFromSnapshot(snapshot) {
     const agents = new Map<string, AgentInfo>()
     for (const a of snapshot.agents) agents.set(a.id, a)
@@ -305,6 +318,7 @@ export const useStudioStore = create<StudioState>((set, get) => ({
       tasks,
       messages: snapshot.messages.slice(-MAX_MESSAGE_HISTORY),
       swarm: snapshot.swarm,
+      activeProducer: snapshot.activeProducer,
       startedAt: snapshot.swarm?.startedAt ?? null,
     })
   },

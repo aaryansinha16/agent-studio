@@ -13,6 +13,7 @@
 
 import type {
   AgentType,
+  ProducerOrigin,
   ProjectSession,
   StudioEvent,
   WorldSnapshot,
@@ -112,6 +113,14 @@ export interface StudioBridgeApi {
    * subscribe so consumers don't need to poll.
    */
   onConnection(handler: (status: BridgeConnectionStatus) => void): Unsubscribe;
+
+  /**
+   * Subscribe to active producer changes (ruflo / orchestrator / mock /
+   * null). Fires whenever a higher-priority producer connects or a
+   * current one disconnects, and once on subscribe with the last-known
+   * origin so the UI can render status without waiting for a transition.
+   */
+  onProducer(handler: (origin: ProducerOrigin | null) => void): Unsubscribe;
 
   /** Request the current full world snapshot from the main process. */
   requestState(): Promise<WorldSnapshot>;
@@ -219,6 +228,8 @@ export const IPC_CHANNELS = {
   STUDIO_EVENT: 'studio:event',
   /** main → renderer: bridge connection status changed */
   STUDIO_CONNECTION: 'studio:connection',
+  /** main → renderer: active producer origin changed */
+  STUDIO_PRODUCER: 'studio:producer',
   /** main → renderer: focus a specific agent in the studio panel */
   STUDIO_FOCUS_AGENT: 'studio:focus-agent',
   /** renderer → main (invoke): get current world snapshot */

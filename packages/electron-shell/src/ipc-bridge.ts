@@ -14,6 +14,7 @@ import {
   type BridgeConnectionStatus,
   type LaunchParams,
   type LaunchResult,
+  type ProducerOrigin,
   type ProjectSession,
   type StudioEvent,
   type WorkspaceInfo,
@@ -68,6 +69,9 @@ export const wireIpcBridge = (options: WireOptions): (() => void) => {
   const onStatus = (status: BridgeConnectionStatus) => {
     broadcast(IPC_CHANNELS.STUDIO_CONNECTION, status)
   }
+  const onProducer = (origin: ProducerOrigin | null) => {
+    broadcast(IPC_CHANNELS.STUDIO_PRODUCER, origin)
+  }
   const onSnapshot = (snapshot: WorldSnapshot) => {
     // Snapshots aren't pushed continuously — renderers ask for them via
     // STUDIO_GET_STATE. We just keep the latest cached on the bridge client
@@ -81,6 +85,7 @@ export const wireIpcBridge = (options: WireOptions): (() => void) => {
 
   bridgeClient.on('event', onEvent)
   bridgeClient.on('status', onStatus)
+  bridgeClient.on('producer', onProducer)
   bridgeClient.on('snapshot', onSnapshot)
 
   // ── renderer → main (invoke) ───────────────────────────────────────────────
@@ -245,6 +250,7 @@ export const wireIpcBridge = (options: WireOptions): (() => void) => {
   return () => {
     bridgeClient.off('event', onEvent)
     bridgeClient.off('status', onStatus)
+    bridgeClient.off('producer', onProducer)
     bridgeClient.off('snapshot', onSnapshot)
     ipcMain.removeHandler(IPC_CHANNELS.STUDIO_GET_STATE)
     ipcMain.removeHandler(IPC_CHANNELS.WORKSPACE_PICK)

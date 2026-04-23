@@ -92,6 +92,9 @@ export const useWebSocket = (options: UseWebSocketOptions = {}): void => {
         case 'replay:response':
           store().hydrateFromSnapshot(message.snapshot)
           return
+        case 'producer:active':
+          store().setActiveProducer(message.origin)
+          return
         case 'pong':
         case 'ping':
         case 'replay:request':

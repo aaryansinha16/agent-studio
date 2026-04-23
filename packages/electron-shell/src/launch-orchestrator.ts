@@ -16,7 +16,7 @@
  *     actually flip this on.
  */
 
-import { spawn, execSync, type ChildProcess } from 'node:child_process'
+import { spawn, spawnSync, execSync, type ChildProcess } from 'node:child_process'
 import { watch, type FSWatcher } from 'node:fs'
 
 import {
@@ -60,6 +60,13 @@ export class LaunchOrchestrator {
   /** All running child processes for the active swarm. */
   private activeChildren: ChildProcess[] = []
   private activeSwarmId: string | null = null
+  /**
+   * Id that `claude-flow swarm init` handed us, when real mode was able
+   * to reach the Ruflo CLI. Null otherwise. Tracked separately from
+   * activeSwarmId so we can call `swarm stop` with Ruflo's own id at
+   * teardown.
+   */
+  private activeRufloSwarmId: string | null = null
   /** File watcher for the workspace folder (real mode only). */
   private activeWatcher: FSWatcher | null = null
 
@@ -112,6 +119,11 @@ export class LaunchOrchestrator {
         timestamp: Date.now(),
         swarmId: this.activeSwarmId,
       })
+    }
+    // Best-effort teardown of the Ruflo record if we registered one.
+    if (this.activeRufloSwarmId) {
+      this.invokeRufloSwarmStop(this.activeRufloSwarmId, process.cwd())
+      this.activeRufloSwarmId = null
     }
     this.teardownWatcher()
     this.activeSwarmId = null
@@ -180,6 +192,84 @@ export class LaunchOrchestrator {
   // Each agent gets a role-specific sub-prompt derived from the user's
   // objective. All stdout is streamed back as agent:log events so the UI
   // can render real terminal output in the inspector.
+  //
+  // Before the fan-out we also invoke `claude-flow swarm init --v3-mode`
+  // so the swarm is actually registered with Ruflo (which records it in
+  // its learning DB and gives us a real swarm id we can correlate with
+  // the hook-shim's events). Parsing is best-effort: if the CLI isn't
+  // installed or the output format shifts, we log and fall through with
+  // the synthesized id — real mode still works, it just isn't tied into
+  // Ruflo's record-keeping.
+
+  /**
+   * Invoke `claude-flow swarm init --v3-mode` and return the swarm id
+   * it reports. Returns null if the CLI is missing or the output can't
+   * be parsed. Synchronous execSync is fine here — init is fast
+   * (~1 s) and launchReal already blocks the main thread during spawn.
+   */
+  private invokeRufloSwarmInit(cwd: string): string | null {
+    const bin = process.env.AGENT_STUDIO_CLAUDE_FLOW_BIN ?? 'claude-flow'
+    // spawnSync (array form, shell: false) to avoid quoting issues when
+    // the bin path contains spaces (e.g. "Open source/" in dev setups).
+    const result = spawnSync(bin, ['swarm', 'init', '--v3-mode'], {
+      cwd,
+      timeout: 15_000,
+      env: { ...process.env },
+      encoding: 'utf8',
+    })
+    if (result.error) {
+      log.warn('claude-flow swarm init failed, continuing without Ruflo registration', {
+        error: result.error.message,
+      })
+      return null
+    }
+    if (result.status !== 0) {
+      log.warn('claude-flow swarm init exited non-zero', {
+        status: result.status,
+        stderr: (result.stderr ?? '').slice(0, 256),
+      })
+      return null
+    }
+    const out = result.stdout ?? ''
+    // The CLI prints a "Swarm ID | swarm-…" row in an ASCII table.
+    const match = out.match(/Swarm ID\s*\|\s*(swarm-[A-Za-z0-9-]+)/)
+    if (match?.[1]) {
+      log.info('Ruflo swarm registered', { rufloSwarmId: match[1] })
+      return match[1]
+    }
+    log.warn('claude-flow swarm init ran but swarm id not found in output')
+    return null
+  }
+
+  /**
+   * Tell Ruflo the swarm is over. Best-effort — if this fails the
+   * swarm entry is left in whatever state Ruflo had; it doesn't break
+   * anything on our side.
+   */
+  private invokeRufloSwarmStop(rufloSwarmId: string, cwd: string): void {
+    const bin = process.env.AGENT_STUDIO_CLAUDE_FLOW_BIN ?? 'claude-flow'
+    const result = spawnSync(bin, ['swarm', 'stop', rufloSwarmId], {
+      cwd,
+      timeout: 10_000,
+      env: { ...process.env },
+      encoding: 'utf8',
+    })
+    if (result.error) {
+      log.warn('claude-flow swarm stop failed', {
+        rufloSwarmId,
+        error: result.error.message,
+      })
+      return
+    }
+    if (result.status === 0) {
+      log.info('Ruflo swarm stopped', { rufloSwarmId })
+    } else {
+      log.warn('claude-flow swarm stop exited non-zero', {
+        rufloSwarmId,
+        status: result.status,
+      })
+    }
+  }
 
   private launchReal(params: LaunchParams, swarmId: string, command: string): LaunchResult {
     if (this.isRunning) this.stop()
@@ -188,6 +278,10 @@ export class LaunchOrchestrator {
     this.activeChildren = []
     const cwd = params.workspacePath ?? process.cwd()
     const roles = distributeAgentRoles(params.agentCount)
+
+    // Register with Ruflo so its hook-shim events can be correlated
+    // back to the same swarm id we're rendering in the UI.
+    this.activeRufloSwarmId = this.invokeRufloSwarmInit(cwd)
 
     // Emit swarm:initialized so the UI knows a swarm is starting.
     this.emit({
@@ -234,6 +328,10 @@ export class LaunchOrchestrator {
           if (completedCount >= totalAgents && this.activeSwarmId === swarmId) {
             // All agents finished — emit shutdown.
             this.emit({ type: 'swarm:shutdown', timestamp: Date.now(), swarmId })
+            if (this.activeRufloSwarmId) {
+              this.invokeRufloSwarmStop(this.activeRufloSwarmId, cwd)
+              this.activeRufloSwarmId = null
+            }
             this.teardownWatcher()
             this.activeSwarmId = null
           }
@@ -291,7 +389,14 @@ export class LaunchOrchestrator {
       const child = spawn('claude', ['-p', '--dangerously-skip-permissions', prompt], {
         cwd,
         shell: false,
-        env: { ...process.env },
+        env: {
+          ...process.env,
+          // Exported so the hooks-shim (if registered in
+          // .claude/settings.json) tags its bridge events with the
+          // same swarm id the UI is rendering, letting events
+          // correlate back to this specific launch.
+          AGENT_STUDIO_SWARM_ID: this.activeRufloSwarmId ?? this.activeSwarmId ?? '',
+        },
         stdio: ['ignore', 'pipe', 'pipe'],
       })
       this.activeChildren.push(child)

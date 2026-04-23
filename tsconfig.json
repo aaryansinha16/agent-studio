@@ -3,6 +3,7 @@
   "references": [
     { "path": "./packages/shared" },
     { "path": "./packages/event-bridge" },
-    { "path": "./packages/ruflo-plugin" }
+    { "path": "./packages/ruflo-plugin" },
+    { "path": "./packages/hooks-shim" }
   ]
 }

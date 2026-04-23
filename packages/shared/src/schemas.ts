@@ -60,11 +60,14 @@ export const SwarmInfoSchema = z.object({
   startedAt: z.number().int().nonnegative(),
 });
 
+export const ProducerOriginSchema = z.enum(['ruflo', 'orchestrator', 'mock']);
+
 export const WorldSnapshotSchema = z.object({
   agents: z.array(AgentInfoSchema),
   tasks: z.array(TaskInfoSchema),
   messages: z.array(AgentMessageSchema),
   swarm: SwarmInfoSchema.nullable(),
+  activeProducer: ProducerOriginSchema.nullable(),
   snapshotAt: z.number().int().nonnegative(),
 });
 
@@ -219,6 +222,17 @@ export const EventEnvelopeSchema = z.object({
   event: StudioEventSchema,
 });
 
+export const HelloMessageSchema = z.object({
+  kind: z.literal('hello'),
+  origin: ProducerOriginSchema,
+  label: z.string().optional(),
+});
+
+export const ProducerActiveMessageSchema = z.object({
+  kind: z.literal('producer:active'),
+  origin: ProducerOriginSchema.nullable(),
+});
+
 export const ReplayRequestSchema = z.object({
   kind: z.literal('replay:request'),
 });
@@ -254,6 +268,8 @@ export const ProjectSaveRequestSchema = z.object({
 
 export const WireMessageSchema = z.discriminatedUnion('kind', [
   EventEnvelopeSchema,
+  HelloMessageSchema,
+  ProducerActiveMessageSchema,
   ReplayRequestSchema,
   ReplayResponseSchema,
   PingMessageSchema,

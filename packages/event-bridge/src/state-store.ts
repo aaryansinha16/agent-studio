@@ -19,6 +19,7 @@ import type { Database as SqliteDatabase, Statement } from 'better-sqlite3';
 import {
   type AgentInfo,
   type AgentMessage,
+  type ProducerOrigin,
   type ProjectSession,
   type StudioEvent,
   type SwarmInfo,
@@ -144,6 +145,16 @@ export class StateStore {
     return applied;
   }
 
+  private activeProducer: ProducerOrigin | null = null;
+
+  setActiveProducer(origin: ProducerOrigin | null): void {
+    this.activeProducer = origin;
+  }
+
+  getActiveProducer(): ProducerOrigin | null {
+    return this.activeProducer;
+  }
+
   /** Snapshot the entire world state — used to bootstrap newly connected UI clients. */
   getFullState(): WorldSnapshot {
     return {
@@ -151,6 +162,7 @@ export class StateStore {
       tasks: Array.from(this.tasks.values()),
       messages: [...this.messages],
       swarm: this.swarm,
+      activeProducer: this.activeProducer,
       snapshotAt: Date.now(),
     };
   }

@@ -18,6 +18,8 @@ import { ZodError } from 'zod';
 
 import {
   type EventEnvelope,
+  type ProducerActiveMessage,
+  type ProducerOrigin,
   type ReplayResponse,
   type WireMessage,
   DEFAULT_BRIDGE_HOST,
@@ -38,9 +40,20 @@ interface ClientMeta {
   id: string;
   /** Producer = sends events; consumer = receives broadcasts. A client may be both. */
   role: 'producer' | 'consumer' | 'unknown';
+  /** For producers: which origin they announced via `hello` (or inferred). */
+  origin: ProducerOrigin | null;
+  /** Free-form label for logs. */
+  label: string | null;
   connectedAt: number;
   isAlive: boolean;
 }
+
+/** Priority among simultaneously-connected producers — high number wins. */
+const ORIGIN_PRIORITY: Record<ProducerOrigin, number> = {
+  ruflo: 3,
+  orchestrator: 2,
+  mock: 1,
+};
 
 interface BridgeOptions {
   host?: string;
@@ -81,6 +94,8 @@ export const startBridge = (options: BridgeOptions = {}): BridgeHandle => {
     const meta: ClientMeta = {
       id: `c${nextClientId++}`,
       role: 'unknown',
+      origin: null,
+      label: null,
       connectedAt: Date.now(),
       isAlive: true,
     };
@@ -108,7 +123,12 @@ export const startBridge = (options: BridgeOptions = {}): BridgeHandle => {
 
     socket.on('close', () => {
       clients.delete(socket);
-      log.info('client disconnected', { clientId: meta.id, total: clients.size });
+      log.info('client disconnected', {
+        clientId: meta.id,
+        origin: meta.origin,
+        total: clients.size,
+      });
+      if (meta.origin) recomputeActiveProducer();
     });
 
     socket.on('error', (err) => {
@@ -161,8 +181,39 @@ export const startBridge = (options: BridgeOptions = {}): BridgeHandle => {
     }
 
     switch (message.kind) {
+      case 'hello': {
+        meta.origin = message.origin;
+        meta.label = message.label ?? null;
+        // Only upgrade role if the socket hadn't already announced
+        // itself as a consumer (via replay:request). A single socket
+        // can be both — e.g. the electron-shell bridge-client consumes
+        // broadcasts AND produces orchestrator-originated events.
+        if (meta.role === 'unknown') meta.role = 'producer';
+        log.info('producer announced', {
+          clientId: meta.id,
+          origin: meta.origin,
+          label: meta.label,
+          role: meta.role,
+        });
+        recomputeActiveProducer();
+        return;
+      }
       case 'event': {
         if (meta.role === 'unknown') meta.role = 'producer';
+        // Producers that never sent `hello` are assumed to be lowest-
+        // priority so they don't silently override a live ruflo stream.
+        if (meta.origin === null) meta.origin = 'mock';
+        // Gate: only the currently active producer's events are applied.
+        const active = stateStore.getActiveProducer();
+        if (active !== null && meta.origin !== active) {
+          log.debug?.('dropping event from non-active producer', {
+            clientId: meta.id,
+            origin: meta.origin,
+            active,
+          });
+          return;
+        }
+        if (active === null) recomputeActiveProducer();
         const applied = stateStore.applyEvent(message.event);
         if (applied) {
           recorder.record(message.event);
@@ -177,6 +228,12 @@ export const startBridge = (options: BridgeOptions = {}): BridgeHandle => {
           snapshot: stateStore.getFullState(),
         };
         sendJson(socket, response);
+        // Also push the current active producer so the UI doesn't
+        // have to wait for the next transition to know the state.
+        sendJson(socket, {
+          kind: 'producer:active',
+          origin: stateStore.getActiveProducer(),
+        });
         return;
       }
       case 'ping': {
@@ -214,7 +271,8 @@ export const startBridge = (options: BridgeOptions = {}): BridgeHandle => {
       }
       case 'pong':
       case 'replay:response':
-      case 'projects:list-response': {
+      case 'projects:list-response':
+      case 'producer:active': {
         // No-op — these are bridge → client messages.
         return;
       }
@@ -235,6 +293,42 @@ export const startBridge = (options: BridgeOptions = {}): BridgeHandle => {
         socket.send(payload);
       } catch (err) {
         log.warn('broadcast send failed', { clientId: meta.id, error: String(err) });
+      }
+    }
+  };
+
+  /**
+   * Scan producers and pick the highest-priority origin currently
+   * connected. Updates state and broadcasts to consumers if the active
+   * origin changed.
+   */
+  const recomputeActiveProducer = (): void => {
+    let best: ProducerOrigin | null = null;
+    // Consider any connected client that has announced an origin, even
+    // if it's also serving as a consumer (dual-role sockets are valid).
+    for (const meta of clients.values()) {
+      if (!meta.origin) continue;
+      if (best === null || ORIGIN_PRIORITY[meta.origin] > ORIGIN_PRIORITY[best]) {
+        best = meta.origin;
+      }
+    }
+    const prev = stateStore.getActiveProducer();
+    if (prev === best) return;
+    stateStore.setActiveProducer(best);
+    log.info('active producer changed', { from: prev, to: best });
+    broadcastProducerActive(best);
+  };
+
+  const broadcastProducerActive = (origin: ProducerOrigin | null): void => {
+    const message: ProducerActiveMessage = { kind: 'producer:active', origin };
+    const payload = JSON.stringify(message);
+    for (const [socket, meta] of clients) {
+      if (meta.role === 'producer') continue;
+      if (socket.readyState !== socket.OPEN) continue;
+      try {
+        socket.send(payload);
+      } catch (err) {
+        log.warn('producer:active broadcast failed', { clientId: meta.id, error: String(err) });
       }
     }
   };

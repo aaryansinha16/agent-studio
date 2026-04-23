@@ -114,6 +114,8 @@ export interface WorldSnapshot {
   tasks: TaskInfo[];
   messages: AgentMessage[];
   swarm: SwarmInfo | null;
+  /** Currently active event producer, null if no producer is connected. */
+  activeProducer: ProducerOrigin | null;
   /** Unix epoch ms when the snapshot was captured. */
   snapshotAt: number;
 }
@@ -293,6 +295,38 @@ export type StudioEventType = StudioEvent['type'];
 // Wire protocol — what actually goes over the WebSocket.
 // ─────────────────────────────────────────────────────────────────────────────
 
+/**
+ * Typed producer origin. Identifies who's pushing events at the bridge
+ * so the UI can render a truthful "live / mock" indicator and the
+ * bridge can resolve collisions when multiple producers are attached.
+ *
+ * Priority (highest wins when more than one is connected):
+ *   ruflo > orchestrator > mock
+ */
+export type ProducerOrigin = 'ruflo' | 'orchestrator' | 'mock';
+
+/**
+ * First message a producer sends after connecting. Announces which
+ * origin it represents. If a producer omits this and starts emitting
+ * events, the bridge assumes origin 'mock' — the weakest priority.
+ */
+export interface HelloMessage {
+  kind: 'hello';
+  origin: ProducerOrigin;
+  /** Free-form label for logs (e.g. '@agent-studio/ruflo-plugin@0.1.0'). */
+  label?: string;
+}
+
+/**
+ * Bridge tells consumers which producer origin is currently "in charge"
+ * so the UI header can show "Live Ruflo" vs "Mock" vs "—". Emitted on
+ * every transition and also on initial connect.
+ */
+export interface ProducerActiveMessage {
+  kind: 'producer:active';
+  origin: ProducerOrigin | null;
+}
+
 /** A producer (plugin/mock) sends an event to the bridge. */
 export interface EventEnvelope {
   kind: 'event';
@@ -346,6 +380,8 @@ export interface ProjectSaveRequest {
 /** Every message that can flow over the WebSocket, in either direction. */
 export type WireMessage =
   | EventEnvelope
+  | HelloMessage
+  | ProducerActiveMessage
   | ReplayRequest
   | ReplayResponse
   | PingMessage

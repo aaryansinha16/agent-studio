@@ -16,6 +16,7 @@ import WebSocket from 'ws'
 import {
   type BridgeConnectionStatus,
   type EventEnvelope,
+  type ProducerOrigin,
   type ProjectSession,
   type StudioEvent,
   type WireMessage,
@@ -43,6 +44,7 @@ type BridgeClientEvents = {
   status: [BridgeConnectionStatus]
   snapshot: [WorldSnapshot]
   projects: [ProjectSession[]]
+  producer: [ProducerOrigin | null]
 }
 
 /**
@@ -63,6 +65,8 @@ export class BridgeClient extends EventEmitter<BridgeClientEvents> {
   private reconnectTimer: NodeJS.Timeout | null = null
   private heartbeatTimer: NodeJS.Timeout | null = null
   private closed = false
+  /** True once we've sent a hello as an orchestrator producer. */
+  private announcedProducer = false
   /** Callbacks waiting for the next projects:list-response. */
   private pendingProjectRequests: Array<(projects: ProjectSession[]) => void> = []
 
@@ -115,6 +119,13 @@ export class BridgeClient extends EventEmitter<BridgeClientEvents> {
    * report failure to the user.
    */
   sendEvent(event: StudioEvent, source: string = SOURCE_PLUGIN): void {
+    // Lazy hello — on first event, announce ourselves to the bridge
+    // as an orchestrator-origin producer. See connect()'s open handler
+    // for the reconnect path.
+    if (!this.announcedProducer) {
+      this.announcedProducer = true
+      this.send({ kind: 'hello', origin: 'orchestrator', label: 'electron-shell' })
+    }
     const envelope: EventEnvelope = { kind: 'event', source, event }
     this.send(envelope)
   }
@@ -185,7 +196,16 @@ export class BridgeClient extends EventEmitter<BridgeClientEvents> {
       this.setStatus('connected')
       this.startHeartbeat()
       // Ask for the current snapshot so newly opened windows have data.
+      // We intentionally DO NOT announce ourselves as a producer up
+      // front — that only happens on the first sendEvent() call so an
+      // idle Electron instance doesn't suppress a concurrent
+      // mock-events.ts producer.
       this.send({ kind: 'replay:request' })
+      // If we've previously produced events in this session, re-announce
+      // after a reconnect so the bridge knows our origin again.
+      if (this.announcedProducer) {
+        this.send({ kind: 'hello', origin: 'orchestrator', label: 'electron-shell' })
+      }
     })
 
     socket.on('message', (data) => {
@@ -276,6 +296,10 @@ export class BridgeClient extends EventEmitter<BridgeClientEvents> {
         for (const waiter of waiters) waiter([...message.projects])
         return
       }
+      case 'producer:active':
+        this.emit('producer', message.origin)
+        return
+      case 'hello':
       case 'pong':
       case 'ping':
       case 'replay:request':

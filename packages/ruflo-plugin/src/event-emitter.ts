@@ -16,6 +16,8 @@ import WebSocket from 'ws';
 
 import {
   type EventEnvelope,
+  type HelloMessage,
+  type ProducerOrigin,
   type StudioEvent,
   DEFAULT_BRIDGE_HOST,
   DEFAULT_BRIDGE_PORT,
@@ -35,6 +37,11 @@ interface EmitterOptions {
   url?: string;
   /** Identifier put into the EventEnvelope.source field. */
   source?: string;
+  /**
+   * Typed producer origin announced to the bridge on connect. Defaults
+   * to 'ruflo' since this emitter lives in the ruflo plugin.
+   */
+  origin?: ProducerOrigin;
   /** Maximum events to buffer while disconnected. Older events are dropped. */
   maxBufferSize?: number;
 }
@@ -43,6 +50,7 @@ interface EmitterOptions {
 export class StudioEventEmitter {
   private readonly url: string;
   private readonly source: string;
+  private readonly origin: ProducerOrigin;
   private readonly maxBufferSize: number;
   private socket: WebSocket | null = null;
   private connecting = false;
@@ -54,6 +62,7 @@ export class StudioEventEmitter {
   constructor(options: EmitterOptions = {}) {
     this.url = options.url ?? defaultBridgeUrl(DEFAULT_BRIDGE_HOST, DEFAULT_BRIDGE_PORT);
     this.source = options.source ?? SOURCE_PLUGIN;
+    this.origin = options.origin ?? 'ruflo';
     this.maxBufferSize = options.maxBufferSize ?? 500;
   }
 
@@ -135,7 +144,19 @@ export class StudioEventEmitter {
     socket.once('open', () => {
       this.connecting = false;
       this.reconnectAttempt = 0;
-      log.info('connected to bridge', { url: this.url });
+      log.info('connected to bridge', { url: this.url, origin: this.origin });
+      // Announce who we are before sending events so the bridge can
+      // route/gate appropriately (ruflo > orchestrator > mock).
+      const hello: HelloMessage = {
+        kind: 'hello',
+        origin: this.origin,
+        label: this.source,
+      };
+      try {
+        socket.send(JSON.stringify(hello));
+      } catch (err) {
+        log.warn('hello send failed', { error: String(err) });
+      }
       this.flushBuffer();
     });
 

@@ -96,6 +96,7 @@ export const wireIpcBridge = (options: WireOptions): (() => void) => {
       tasks: [],
       messages: [],
       swarm: null,
+      activeProducer: null,
       snapshotAt: Date.now(),
     }
   })

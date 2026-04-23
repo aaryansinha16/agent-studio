@@ -121,6 +121,15 @@ class MockRunner {
       try {
         this.socket = await openSocket(this.url)
         log.info('connected to bridge', { url: this.url, speed: this.speed })
+        // Announce origin — the bridge uses this to resolve producer
+        // priority if a real ruflo producer is also connected.
+        try {
+          this.socket.send(
+            JSON.stringify({ kind: 'hello', origin: 'mock', label: 'mock-events' }),
+          )
+        } catch (err) {
+          log.warn('hello send failed', { error: String(err) })
+        }
         this.socket.on('close', (code, reason) => {
           log.warn('disconnected from bridge', { code, reason: reason.toString() })
           process.exit(0)
